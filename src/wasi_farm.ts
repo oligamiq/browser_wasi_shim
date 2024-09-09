@@ -138,6 +138,10 @@ export class WASIFarmPark {
   // fd_read: (fd: u32, iovs_ptr: pointer, iovs_len: u32) => [u32, errno];
   //    use share_arrays_memory;
   //    (fd: u32, iovs_ptr: pointer, iovs_len: u32) => [u32, errno];
+  // fd_readdir: (fd: u32, buf_ptr: pointer, buf_len: u32, cookie: u64) => [u32, errno];
+  //    use share_arrays_memory;
+  //    (fd: u32, buf_len: u32, cookie: u64) => [buf_ptr: pointer, buf_len: u32, errno];
+  // fd_renumber: (fd: u32, to: u32) => errno;
   access_fds: SharedArrayBuffer = new SharedArrayBuffer(9);
 }
 
