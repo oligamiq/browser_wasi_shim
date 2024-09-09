@@ -11,7 +11,7 @@ export default class WASIFarm {
   args: Array<string>;
   env: Array<string>;
   fds: Array<Fd>;
-  sockets: WASIFarmSocketReceiver[];
+  sockets: WASIFarmPark[];
 
   constructor(
     args: Array<string>,
@@ -69,7 +69,7 @@ export default class WASIFarm {
   }
 
   get_ref(): [WASIFarmRef, (socket: Channel) => void] {
-    let socket = new WASIFarmSocketPark(this.member_ref());
+    let socket = new WASIFarmPark(this.member_ref());
 
     return [new WASIFarmRef(
       socket.socket_(),
@@ -77,183 +77,68 @@ export default class WASIFarm {
   }
 }
 
+type U8 = number;
 type Message = {
-  id: number;
-  movement: number;
-  props: any;
-  kind: "method" | "getter" | "setter";
-  args: any[];
+  func_id: U8;
 }
 
-export class WASIFarmSocketPark {
-  socket: SharedArrayBuffer[];
-  objects: any[];
-  queue: Message[];
-  channel: Channel;
+export class WASIFarmPark {
+  // This is copy
+  args: Array<string>;
+  // This is copy
+  env: Array<string>;
+  // This is Proxy
+  fds: Array<Fd>;
 
-  constructor(
-    objects: any[],
-  ) {
-    for (const object of objects) {
-      let array: SharedArrayBuffer;
-      if (object instanceof Array) {
-        array = new SharedArrayBuffer(8 * 2 + object.length * 8);
-      } else {
-        array = new SharedArrayBuffer(8 * 2);
-      }
-      let view = new Int32Array(array);
-      view[0] = -1;
-      this.socket.push(array);
-    }
-    this.objects = objects;
-  }
+  // !Sizedを渡す
+  // 最初の4byteはロック用の値: i32
+  // 次の4byteは現在のarrayの数: m: i32
+  // 次の4byteはshare_arrays_memoryの使っている場所の長さ: n: i32
+  // busyでなくなれば直ぐに空になるはずなので、空になったときだけリセットする。
+  // 長くなりすぎても、ブラウザの仮想化により大丈夫なはず
+  // First-Fitよりもさらに簡素なアルゴリズムを使う
+  share_arrays_memory: SharedArrayBuffer = new SharedArrayBuffer(0);
+  // データを追加するときは、Atomics.waitで、最初の4byteが0になるまで待つ
+  // その後、Atomics.compareExchangeで、最初の4byteを1にする
+  // 上の返り値が0ならば、*1
+  // 上の返り値が1ならば、Atomics.waitで、最初の4byteが0になるまで待つ
+  // *1: 2番目をAtomics.addで1増やす。返り値が0なら、リセットする。
+  // データを追加する。足りないときは延ばす。
+  // 解放するときは、Atomics.subで1減らすだけ。
 
-  socket_() {
-    return this.socket;
-  }
-
-  register(
-    channel: Channel,
-  ) {
-    this.channel = channel;
-    this.channel.onmessage = (message: Message) => {
-      this.queue.push(message);
-    };
-  }
-
-  observer(
-    socket: Channel,
-  ) {
-
-  }
-
-  async observe_array(
-    socket: Channel,
-    id: number,
-    array: any,
-  ) {
-    const bufferView = new Int32Array(this.socket[id]);
-
-    while (true) {
-      let { value } = Atomics.waitAsync(bufferView, 0, -1);
-      let ret: "not-equal" | "timed-out" | "ok";
-      if (value instanceof Promise) {
-        ret = await value;
-      } else {
-        ret = value;
-      }
-      try {
-        if (ret === "ok" || ret === "not-equal") {
-          const movement = bufferView[0];
-          if (movement === -1) {
-            throw new Error("movement is -1");
-          } else if (movement === -2) {
-            // Arrayそのものを操作する
-
-            let result;
-
-            try {
-              const old_queue = this.queue;
-              const old = Atomics.exchange(bufferView, 1, -2);
-              const observer_num = Atomics.notify(bufferView, 1);
-              if (observer_num !== 1) {
-                throw new Error("observer_num is not 1");
-              }
-              if (old !== 0) {
-                throw new Error("old is not 0");
-              }
-              const ret = Atomics.wait(bufferView, 0, -2);
-              if (ret !== "ok" && ret !== "not-equal") {
-                throw new Error("timeout");
-              }
-
-              // queueから取り出す
-              // 5s以内にqueueに増えなければ、timeout
-              const start = Date.now();
-              let messages: Message[];
-              while (true) {
-                messages = this.queue.filter((message) => message.id === id && message.movement === movement);
-                if (messages.length > 0) {
-                  break;
-                }
-                await new Promise((resolve) => setTimeout(resolve, 100));
-                if (Date.now() - start > 5000) {
-                  throw new Error("timeout");
-                }
-              }
-
-              let message: Message;
-              if (messages.length === 0) {
-                throw new Error("message is not found");
-              } else if (messages.length > 1) {
-                // 古いmessageは無視する
-                message = messages[messages.length - 1];
-                this.queue = this.queue.filter((message) => !(message.id === id && message.movement === movement));
-              } else {
-                message = messages[0];
-              }
-
-              // messageを処理する
-              if (message === undefined) {
-                throw new Error("message is undefined");
-              }
-              const props = message.props;
-              const args = message.args;
-              const kind = message.kind;
-              if (props === undefined) {
-                throw new Error("props is undefined");
-              }
-              if (args === undefined) {
-                throw new Error("args is undefined");
-              }
-              if (kind === undefined) {
-                throw new Error("kind is undefined");
-              }
-
-              // 処理する
-              if (kind === "method") {
-                const ret = array[props](...args);
-                if (ret instanceof Promise) {
-                  result = await ret;
-                }
-              } else if (kind === "getter") {
-                const ret = array[props];
-                if (ret instanceof Promise) {
-                  result = await ret;
-                }
-              } else if (kind === "setter") {
-                if (args.length !== 1) {
-                  throw new Error("args.length is not 1");
-                }
-
-                array[props] = args[0];
-              } else {
-                throw new Error("kind is invalid");
-              }
-            } catch (e) {
-              result = e;
-            }
-            // 結果を返す
-            socket.postMessage(result);
-
-            // 通知する
-            bufferView[0] = 0;
-            Atomics.notify(bufferView, 0);
-
-            bufferView[1] = 0;
-          } else if (movement >= 0) {
-            // Arrayの要素を操作する
-          } else {
-            throw new Error("movement is invalid");
-          }
-        } else if (ret === "timed-out") {
-          throw new Error("timeout");
-        }
-      } catch (e) {
-        console.error(e);
-      }
-    }
-  }
+  // args, envは変更されないので、コピーで良い
+  // wasm32なので、pointerはu32
+  // errnoはu8
+  // https://github.com/WebAssembly/WASI/blob/4feaf733e946c375b610cc5d39ea2e1a68046e62/legacy/preview1/docs.md
+  // 一つ目は関数シグネチャ、二つ目が存在する場合はParkにおいて通信しなければならないデータを表している。同じ場合は書いていない。
+  // ここから、fdへの直接のアクセス
+  // fd_advise: (fd: u32, offset: u64, len: u64, advice: u8) => errno;
+  //    (fd: u32) => errno;
+  // fd_allocate: (fd: u32, offset: u64, len: u64) => errno;
+  // fd_close: (fd: u32) => errno;
+  // fd_datasync: (fd: u32) => errno;
+  // fd_fdstat_get: (fd: u32, fdstat_ptr: pointer) => errno;
+  //    (fd: u32) => [wasi.Fdstat(u32 * 6)], errno];
+  // fd_fdstat_set_flags: (fd: u32, flags: u16) => errno;
+  // fd_fdstat_set_rights: (fd: u32, fs_rights_base: u64, fs_rights_inheriting: u64) => errno;
+  // fd_filestat_get: (fd: u32, filestat_ptr: pointer) => errno;
+  //    (fd: u32) => [wasi.Filestat(u32 * 16)], errno];
+  // fd_filestat_set_size: (fd: u32, size: u64) => errno;
+  // fd_filestat_set_times: (fd: u32, atim: u64, mtim: u64, fst_flags: u16) => errno;
+  // fd_pread: (fd: u32, iovs_ptr: pointer, iovs_len: u32, offset: u64) => [u32, errno];
+  //    use share_arrays_memory;
+  //    (fd: u32, iovs_ptr: pointer, iovs_len: u32, offset: u64) => [u32, errno];
+  // fd_prestat_get: (fd: u32, prestat_ptr: pointer) => errno;
+  //    (fd: u32) => [wasi.Prestat(u32 * 2)], errno];
+  // fd_prestat_dir_name: (fd: u32, path_ptr: pointer, path_len: u32) => errno;
+  //    (fd: u32) => [path_ptr: pointer, path_len: u32, errno];
+  // fd_pwrite: (fd: u32, iovs_ptr: pointer, iovs_len: u32, offset: u64) => [u32, errno];
+  //    use share_arrays_memory;
+  //    (fd: u32, write_data: pointer, write_data_len: u32, offset: u64) => [u32, errno];
+  // fd_read: (fd: u32, iovs_ptr: pointer, iovs_len: u32) => [u32, errno];
+  //    use share_arrays_memory;
+  //    (fd: u32, iovs_ptr: pointer, iovs_len: u32) => [u32, errno];
+  access_fds: SharedArrayBuffer = new SharedArrayBuffer(9);
 }
 
 export class WASIFarmRef {
