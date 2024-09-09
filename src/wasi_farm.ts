@@ -2,11 +2,6 @@ import { debug } from "./debug.js";
 import { Fd } from "./fd.js";
 import WASI, { Options } from "./wasi.js";
 
-interface Channel {
-  postMessage: (message: any) => void | Promise<void>;
-  onmessage: (message: any) => void | Promise<void>;
-}
-
 export default class WASIFarm {
   args: Array<string>;
   env: Array<string>;
