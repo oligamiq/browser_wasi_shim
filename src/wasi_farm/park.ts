@@ -1,55 +1,5 @@
-import { debug } from "./debug.js";
-import { Fd } from "./fd.js";
-import WASI, { Options } from "./wasi.js";
-
-export default class WASIFarm {
-  args: Array<string>;
-  env: Array<string>;
-  fds: Array<Fd>;
-  sockets: WASIFarmPark[];
-
-  constructor(
-    args: Array<string>,
-    env: Array<string>,
-    fds: Array<Fd>,
-    options: Options = {},
-  ) {
-    debug.enable(options.debug);
-
-    this.args = args;
-    this.env = env;
-    this.fds = fds;
-    this.sockets = [];
-  }
-
-  member_ref(): [Array<string>, Array<string>, Array<Fd>] {
-    const args = [...this.args];
-    const env = [...this.env];
-
-    const fds = new Proxy([] as Array<Fd>, {
-      get: (_, prop) => {
-        console.log("fds", prop);
-
-        if (prop === "push") {
-          return (fd: Fd) => {
-            this.fds.push(fd);
-          };
-        }
-        return this.fds[prop];
-      }
-    });
-
-    return [args, env, fds];
-  }
-
-  get_ref(): WASIFarmRef {
-    let socket = new WASIFarmPark(this.member_ref());
-
-    this.sockets.push(socket);
-
-    return socket.get_ref();
-  }
-}
+import { Fd } from "../fd.js";
+import { WASIFarmRef } from "./ref.js";
 
 export class WASIFarmPark {
   // This is copy
@@ -66,7 +16,7 @@ export class WASIFarmPark {
   // busyでなくなれば直ぐに空になるはずなので、空になったときだけリセットする。
   // 長くなりすぎても、ブラウザの仮想化により大丈夫なはず
   // First-Fitよりもさらに簡素なアルゴリズムを使う
-  share_arrays_memory: SharedArrayBuffer = new SharedArrayBuffer(0);
+  share_arrays_memory: SharedArrayBuffer = new SharedArrayBuffer(12);
   // データを追加するときは、Atomics.waitで、最初の4byteが0になるまで待つ
   // その後、Atomics.compareExchangeで、最初の4byteを1にする
   // 上の返り値が0ならば、*1
@@ -132,29 +82,20 @@ export class WASIFarmPark {
   // path_symlink: (old_path_ptr: pointer, old_path_len: u32, fd: u32, new_path_ptr: pointer, new_path_len: u32) => errno;
   // path_unlink_file: (fd: u32, path_ptr: pointer, path_len: u32) => errno;
 
-  // ここから、fdを使わないもの
-  // 上と競合せずに使える。
-  // poll_oneoff: (in_ptr: pointer, out_ptr: pointer, nsubscriptions: u32, nevents_ptr: pointer) => errno;
-  // note: async io not supported
-  // proc_exit: (rval: u32) => never;
-  // proc_raise: (sig: u8) => errno;
-  // sched_yield: () => errno;
-  // random_get: (buf_ptr: pointer, buf_len: u32) => errno;
-  // sock_recv: "sockets not supported";
-  // sock_send: "sockets not supported";
-  // sock_shutdown: "sockets not supported";
-  // sock_accept: "sockets not supported";
-
   // fdを使いたい際に、ロックする
-  lock_fds: SharedArrayBuffer = new SharedArrayBuffer(9);
+  lock_fds: SharedArrayBuffer;
   // 一番大きなサイズはu32 * 16 + 1
   // Alignが面倒なので、u32 * 16 + 4にする
-  fd_func_sig: SharedArrayBuffer = new SharedArrayBuffer(68);
-
+  // つまり1個のサイズは68byte
+  fd_func_sig: SharedArrayBuffer;
   constructor([args, env, fds]: [Array<string>, Array<string>, Array<Fd>]) {
     this.args = args;
     this.env = env;
     this.fds = fds;
+
+    const fds_len = fds.length;
+    this.lock_fds = new SharedArrayBuffer(4 * fds_len);
+    this.fd_func_sig = new SharedArrayBuffer(68 * fds_len);
   }
 
   /// これをpostMessageで送る
@@ -165,20 +106,13 @@ export class WASIFarmPark {
       this.fd_func_sig,
     );
   }
-}
 
-export class WASIFarmRef {
-  share_arrays_memory: SharedArrayBuffer;
-  lock_fds: SharedArrayBuffer;
-  fd_func_sig: SharedArrayBuffer;
+  /// listener
+  listen() {
 
-  constructor(
-    share_arrays_memory: SharedArrayBuffer,
-    lock_fds: SharedArrayBuffer,
-    fd_func_sig: SharedArrayBuffer,
-  ) {
-    this.share_arrays_memory = share_arrays_memory;
-    this.lock_fds = lock_fds;
-    this.fd_func_sig = fd_func_sig;
+  }
+
+  listen_fd(fd: Fd) {
+    // ここで、fdを受け取る
   }
 }

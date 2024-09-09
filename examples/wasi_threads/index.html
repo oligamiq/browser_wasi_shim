@@ -28,11 +28,11 @@
       fds,
       { debug: true },
     );
-    let wasi = wasi_farm.get_wasi_ref();
+    let wasi_ref = wasi_farm.get_ref();
     if (window.Worker) {
       const myWorker = new Worker("./worker.js");
 
-      myWorker.postMessage({ wasi });
+      myWorker.postMessage({ wasi_ref });
     } else {
       console.error("Web Workers are not supported in this environment.");
     }
