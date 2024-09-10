@@ -1,5 +1,9 @@
 import { Fd } from "../fd.js";
+import * as wasi from "../wasi_defs.js";
+import { Allocator } from "./allocator.js";
 import { WASIFarmRef } from "./ref.js";
+
+const fd_func_sig_size: number = 18;
 
 export class WASIFarmPark {
   // This is copy
@@ -9,21 +13,7 @@ export class WASIFarmPark {
   // This is Proxy
   fds: Array<Fd>;
 
-  // !Sizedを渡す
-  // 最初の4byteはロック用の値: i32
-  // 次の4byteは現在のarrayの数: m: i32
-  // 次の4byteはshare_arrays_memoryの使っている場所の長さ: n: i32
-  // busyでなくなれば直ぐに空になるはずなので、空になったときだけリセットする。
-  // 長くなりすぎても、ブラウザの仮想化により大丈夫なはず
-  // First-Fitよりもさらに簡素なアルゴリズムを使う
-  share_arrays_memory: SharedArrayBuffer = new SharedArrayBuffer(12);
-  // データを追加するときは、Atomics.waitで、最初の4byteが0になるまで待つ
-  // その後、Atomics.compareExchangeで、最初の4byteを1にする
-  // 上の返り値が0ならば、*1
-  // 上の返り値が1ならば、Atomics.waitで、最初の4byteが0になるまで待つ
-  // *1: 2番目をAtomics.addで1増やす。返り値が0なら、リセットする。
-  // データを追加する。足りないときは延ばす。
-  // 解放するときは、Atomics.subで1減らすだけ。
+  allocator: Allocator;
 
   // args, envは変更されないので、コピーで良い
   // fdsに依存しない関数は飛ばす
@@ -83,10 +73,12 @@ export class WASIFarmPark {
   // path_unlink_file: (fd: u32, path_ptr: pointer, path_len: u32) => errno;
 
   // fdを使いたい際に、ロックする
+  // [lock, call_func]
   lock_fds: SharedArrayBuffer;
   // 一番大きなサイズはu32 * 16 + 1
   // Alignが面倒なので、u32 * 16 + 4にする
   // つまり1個のサイズは68byte
+
   fd_func_sig: SharedArrayBuffer;
   constructor([args, env, fds]: [Array<string>, Array<string>, Array<Fd>]) {
     this.args = args;
@@ -94,14 +86,15 @@ export class WASIFarmPark {
     this.fds = fds;
 
     const fds_len = fds.length;
-    this.lock_fds = new SharedArrayBuffer(4 * fds_len);
-    this.fd_func_sig = new SharedArrayBuffer(68 * fds_len);
+    this.allocator = new Allocator();
+    this.lock_fds = new SharedArrayBuffer(4 * fds_len * 2);
+    this.fd_func_sig = new SharedArrayBuffer(fd_func_sig_size * 4 * fds_len);
   }
 
   /// これをpostMessageで送る
   get_ref(): WASIFarmRef {
     return new WASIFarmRef(
-      this.share_arrays_memory,
+      this.allocator,
       this.lock_fds,
       this.fd_func_sig,
     );
@@ -112,7 +105,261 @@ export class WASIFarmPark {
 
   }
 
-  listen_fd(fd: Fd) {
-    // ここで、fdを受け取る
+  // workerでインスタンス化するより先に呼び出す
+  async listen_fd(fd_n: number) {
+    const lock_view = new Int32Array(this.lock_fds);
+    const func_sig_view_u8 = new Uint8Array(this.fd_func_sig);
+    const func_sig_view_u16 = new Uint16Array(this.fd_func_sig);
+    const func_sig_view_i32 = new Int32Array(this.fd_func_sig);
+    const func_sig_view_u64 = new BigUint64Array(this.fd_func_sig);
+    const fd_func_sig_u8_offset = fd_n * fd_func_sig_size * 4;
+    const fd_func_sig_u16_offset = fd_n * fd_func_sig_size * 2;
+    const fd_func_sig_i32_offset = fd_n * fd_func_sig_size;
+    const fd_func_sig_u64_offset = fd_n * Math.round(fd_func_sig_size / 2)
+    const errno_offset = fd_func_sig_i32_offset + (fd_func_sig_size - 1);
+    const lock_offset = fd_n * 2;
+    Atomics.store(lock_view, lock_offset, 0);
+    Atomics.store(func_sig_view_i32, fd_func_sig_i32_offset + errno_offset, -1);
+
+    loop: while (true) {
+      try {
+        let lock: "not-equal" | "timed-out" | "ok";
+        const { value } = Atomics.waitAsync(lock_view, lock_offset + 1, 0);
+        if ( value instanceof Promise) {
+          lock = await value;
+        } else {
+          lock = value;
+        }
+        if (lock === "timed-out") {
+          throw new Error("timed-out");
+        }
+
+        const old = Atomics.exchange(lock_view, lock_offset + 1, 0);
+        if (old !== 1) {
+          throw new Error("Call is already set");
+        }
+
+        const set_error = (errno: number) => {
+          const old = Atomics.exchange(func_sig_view_i32, fd_func_sig_i32_offset + errno_offset, errno);
+          if (old !== -1) {
+            throw new Error("Error is already set");
+          }
+          Atomics.notify(func_sig_view_i32, fd_func_sig_i32_offset + errno_offset);
+        }
+
+        const func_number = Atomics.load(func_sig_view_i32, fd_func_sig_i32_offset);
+        switch (func_number) {
+          // fd_advise: (fd: u32) => errno;
+          case 7: {
+            const fd = Atomics.load(func_sig_view_i32, fd_func_sig_i32_offset + 1);
+
+            if (this.fds[fd] != undefined) {
+              set_error(wasi.ERRNO_SUCCESS);
+              continue loop;
+            } else {
+              set_error(wasi.ERRNO_BADF);
+              continue loop;
+            }
+          }
+          // fd_allocate: (fd: u32, offset: u64, len: u64) => errno;
+          case 8: {
+            const fd = Atomics.load(func_sig_view_i32, fd_func_sig_i32_offset + 1);
+            const offset = Atomics.load(func_sig_view_u64, fd_func_sig_u64_offset + 1);
+            const len = Atomics.load(func_sig_view_u64, fd_func_sig_u64_offset + 2);
+
+            if (this.fds[fd] != undefined) {
+              set_error(this.fds[fd].fd_allocate(offset, len));
+              continue loop;
+            } else {
+              set_error(wasi.ERRNO_BADF);
+              continue loop;
+            }
+          }
+          // fd_close: (fd: u32) => errno;
+          case 9: {
+            const fd = Atomics.load(func_sig_view_i32, fd_func_sig_i32_offset + 1);
+
+            if (this.fds[fd] != undefined) {
+              set_error(this.fds[fd].fd_close());
+              continue loop;
+            } else {
+              set_error(wasi.ERRNO_BADF);
+              continue loop;
+            }
+          }
+          // fd_datasync: (fd: u32) => errno;
+          case 10: {
+            const fd = Atomics.load(func_sig_view_i32, fd_func_sig_i32_offset + 1);
+
+            if (this.fds[fd] != undefined) {
+              set_error(this.fds[fd].fd_sync());
+              continue loop;
+            } else {
+              set_error(wasi.ERRNO_BADF);
+              continue loop;
+            }
+          }
+          // fd_fdstat_get: (fd: u32) => [wasi.Fdstat(u32 * 6)], errno];
+          case 11: {
+            const fd = Atomics.load(func_sig_view_i32, fd_func_sig_i32_offset + 1);
+
+            if (this.fds[fd] != undefined) {
+              const { ret, fdstat } = this.fds[fd].fd_fdstat_get();
+              if (fdstat != null) {
+                Atomics.store(func_sig_view_u8, fd_func_sig_u8_offset, fdstat.fs_filetype);
+                Atomics.store(func_sig_view_u16, fd_func_sig_u16_offset + 2, fdstat.fs_flags);
+                Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset + 1, fdstat.fs_rights_base);
+                Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset + 2, fdstat.fs_rights_inherited);
+              }
+              set_error(ret);
+              continue loop;
+            } else {
+              set_error(wasi.ERRNO_BADF);
+              continue loop;
+            }
+          }
+          // fd_fdstat_set_flags: (fd: u32, flags: u16) => errno;
+          case 12: {
+            const fd = Atomics.load(func_sig_view_i32, fd_func_sig_i32_offset + 1);
+            const flags = Atomics.load(func_sig_view_u16, fd_func_sig_u16_offset + 4);
+
+            if (this.fds[fd] != undefined) {
+              set_error(this.fds[fd].fd_fdstat_set_flags(flags));
+              continue loop;
+            } else {
+              set_error(wasi.ERRNO_BADF);
+              continue loop;
+            }
+          }
+          // fd_fdstat_set_rights: (fd: u32, fs_rights_base: u64, fs_rights_inheriting: u64) => errno;
+          case 13: {
+            const fd = Atomics.load(func_sig_view_i32, fd_func_sig_i32_offset + 1);
+            const fs_rights_base = Atomics.load(func_sig_view_u64, fd_func_sig_u64_offset + 1);
+            const fs_rights_inheriting = Atomics.load(func_sig_view_u64, fd_func_sig_u64_offset + 2);
+
+            if (this.fds[fd] != undefined) {
+              set_error(this.fds[fd].fd_fdstat_set_rights(fs_rights_base, fs_rights_inheriting));
+              continue loop;
+            } else {
+              set_error(wasi.ERRNO_BADF);
+              continue loop;
+            }
+          }
+          // fd_filestat_get: (fd: u32) => [wasi.Filestat(u32 * 16)], errno];
+          case 14: {
+            const fd = Atomics.load(func_sig_view_i32, fd_func_sig_i32_offset + 1);
+
+            if (this.fds[fd] != undefined) {
+              const { ret, filestat } = this.fds[fd].fd_filestat_get();
+              if (filestat != null) {
+                Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset, filestat.dev);
+                Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset + 1, filestat.ino);
+                Atomics.store(func_sig_view_u8, fd_func_sig_u8_offset + 16, filestat.filetype);
+                Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset + 3, filestat.nlink);
+                Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset + 4, filestat.size);
+                Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset + 5, filestat.atim);
+                Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset + 6, filestat.mtim);
+                Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset + 7, filestat.ctim);
+              }
+              set_error(ret);
+              continue loop;
+            } else {
+              set_error(wasi.ERRNO_BADF);
+              continue loop;
+            }
+          }
+          // fd_filestat_set_size: (fd: u32, size: u64) => errno;
+          case 15: {
+            const fd = Atomics.load(func_sig_view_i32, fd_func_sig_i32_offset + 1);
+            const size = Atomics.load(func_sig_view_u64, fd_func_sig_u64_offset + 1);
+
+            if (this.fds[fd] != undefined) {
+              set_error(this.fds[fd].fd_filestat_set_size(size));
+              continue loop;
+            } else {
+              set_error(wasi.ERRNO_BADF);
+              continue loop;
+            }
+          }
+          // fd_filestat_set_times: (fd: u32, atim: u64, mtim: u64, fst_flags: u16) => errno;
+          case 16: {
+            const fd = Atomics.load(func_sig_view_i32, fd_func_sig_i32_offset + 1);
+            const atim = Atomics.load(func_sig_view_u64, fd_func_sig_u64_offset + 1);
+            const mtim = Atomics.load(func_sig_view_u64, fd_func_sig_u64_offset + 2);
+            const fst_flags = Atomics.load(func_sig_view_u16, fd_func_sig_u16_offset + 12);
+
+            if (this.fds[fd] != undefined) {
+              set_error(this.fds[fd].fd_filestat_set_times(atim, mtim, fst_flags));
+              continue loop;
+            } else {
+              set_error(wasi.ERRNO_BADF);
+              continue loop;
+            }
+          }
+          // fd_pread: (fd: u32, iovs_ptr: pointer, iovs_len: u32, offset: u64) => [u32, errno];
+          case 17: {
+            const fd = Atomics.load(func_sig_view_i32, fd_func_sig_i32_offset + 1);
+            const iovs_ptr = Atomics.load(func_sig_view_i32, fd_func_sig_i32_offset + 2);
+            const iovs_len = Atomics.load(func_sig_view_i32, fd_func_sig_i32_offset + 3);
+            let offset = Atomics.load(func_sig_view_u64, fd_func_sig_u64_offset + 2);
+            const data = new Uint32Array(this.allocator.get_memory(iovs_ptr, iovs_len * 8));
+
+            if (this.fds[fd] != undefined) {
+              const iovecs = new Array<wasi.Iovec>();
+              for (let i = 0; i < iovs_len; i++) {
+                const iovec = new wasi.Iovec();
+                iovec.buf = data[i * 2];
+                iovec.buf_len = data[i * 2 + 1];
+                iovecs.push(iovec);
+              }
+
+              let nread = 0;
+              const set_size = (size: number) => {
+                Atomics.store(func_sig_view_i32, fd_func_sig_i32_offset, size);
+              }
+              const set_data = (data: Uint8Array) => {
+                this.allocator.use_defined_memory(iovs_ptr, iovs_len * 8, data);
+              }
+              const sum_len = iovecs.reduce((acc, iovec) => acc + iovec.buf_len, 0);
+              const buffer8 = new Uint8Array(sum_len);
+              for (const iovec of iovecs) {
+                const { ret, data } = this.fds[fd].fd_pread(iovec.buf_len, offset);
+                if (ret != wasi.ERRNO_SUCCESS) {
+                  set_size(nread);
+                  set_data(buffer8);
+                  set_error(ret);
+                  continue loop;
+                }
+                buffer8.set(data, nread);
+                nread += data.length;
+                offset += BigInt(data.length);
+                if (data.length != iovec.buf_len) {
+                  break;
+                }
+              }
+              set_size(nread);
+              set_data(buffer8);
+              set_error(wasi.ERRNO_SUCCESS);
+              continue loop;
+            } else {
+              set_error(wasi.ERRNO_BADF);
+              continue loop;
+            }
+          }
+          default: {
+            throw new Error("Unknown function");
+          }
+        }
+      } catch (e) {
+        console.error(e);
+
+        const lock_view = new Int32Array(this.lock_fds);
+        Atomics.exchange(lock_view, fd_n, 0);
+        const func_sig_view = new Int32Array(this.fd_func_sig);
+        Atomics.exchange(func_sig_view, fd_func_sig_i32_offset + 16, -1);
+
+        continue loop;
+      }
+    }
   }
 }
