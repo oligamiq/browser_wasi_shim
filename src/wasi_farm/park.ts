@@ -88,8 +88,9 @@ export class WASIFarmPark {
 
     const fds_len = fds.length;
     this.allocator = new Allocator();
-    this.lock_fds = new SharedArrayBuffer(4 * fds_len * 2);
-    this.fd_func_sig = new SharedArrayBuffer(fd_func_sig_size * 4 * fds_len);
+    const max_fds_len = 128;
+    this.lock_fds = new SharedArrayBuffer(4 * max_fds_len * 2);
+    this.fd_func_sig = new SharedArrayBuffer(fd_func_sig_size * 4 * max_fds_len);
   }
 
   /// これをpostMessageで送る
@@ -99,6 +100,16 @@ export class WASIFarmPark {
       this.lock_fds,
       this.fd_func_sig,
     );
+  }
+
+  notify_push_fd(fd: number) {
+    if (this.fds[fd] == undefined) {
+      throw new Error("fd is not defined");
+    }
+    if (fd >= 128) {
+      throw new Error("fd is too big. expand is not supported yet");
+    }
+    this.listen_fd(fd);
   }
 
   /// listener
@@ -778,6 +789,7 @@ export class WASIFarmPark {
               }
               this.fds.push(fd_obj);
               const opened_fd = this.fds.length - 1;
+              this.notify_push_fd(opened_fd);
               const set_fd = (fd: number) => {
                 Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, fd);
               }
