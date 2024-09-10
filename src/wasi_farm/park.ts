@@ -1,3 +1,4 @@
+import { debug } from "../debug.js";
 import { Fd } from "../fd.js";
 import * as wasi from "../wasi_defs.js";
 import { Allocator } from "./allocator.js";
@@ -50,7 +51,7 @@ export class WASIFarmPark {
   //    (fd: u32, iovs_ptr: pointer, iovs_len: u32) => [u32, errno];
   // fd_readdir: (fd: u32, buf_ptr: pointer, buf_len: u32, cookie: u64) => [u32, errno];
   //    use share_arrays_memory;
-  //    (fd: u32, buf_len: u32, cookie: u64) => [buf_ptr: pointer, buf_len: u32, errno];
+  //    (fd: u32, buf_len: u32, cookie: u64) => [buf_ptr: pointer, buf_len: u32, buf_used: u32, errno];
   // fd_renumber: (fd: u32, to: u32) => errno;
   // fd_seek: (fd: u32, offset: i64, whence: u8) => [u64, errno];
   // fd_sync: (fd: u32) => errno;
@@ -66,7 +67,7 @@ export class WASIFarmPark {
   // note: fdsにpushするが、既存のfdに影響しないので、競合しない。
   // path_readlink: (fd: u32, path_ptr: pointer, path_len: u32, buf_ptr: pointer, buf_len: u32) => [u32, errno];
   //    use share_arrays_memory;
-  //    (fd: u32, path_ptr: pointer, path_len: u32, buf_len: u32) => [buf_ptr: pointer, size: u32, errno];
+  //    (fd: u32, path_ptr: pointer, path_len: u32, buf_len: u32) => [buf_len: u32, data_ptr: pointer, data_len: u32, errno];
   // path_remove_directory: (fd: u32, path_ptr: pointer, path_len: u32) => errno;
   // path_rename: (old_fd: u32, old_path_ptr: pointer, old_path_len: u32, new_fd: u32, new_path_ptr: pointer, new_path_len: u32) => errno;
   // path_symlink: (old_path_ptr: pointer, old_path_len: u32, fd: u32, new_path_ptr: pointer, new_path_len: u32) => errno;
@@ -123,7 +124,7 @@ export class WASIFarmPark {
     Atomics.store(lock_view, lock_offset, 0);
     Atomics.store(func_sig_view_i32, fd_func_sig_i32_offset + errno_offset, -1);
 
-    loop: while (true) {
+    while (true) {
       try {
         let lock: "not-equal" | "timed-out" | "ok";
         const { value } = Atomics.waitAsync(lock_view, lock_offset + 1, 0);
@@ -150,17 +151,17 @@ export class WASIFarmPark {
         }
 
         const func_number = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset);
-        switch (func_number) {
+        switcher: switch (func_number) {
           // fd_advise: (fd: u32) => errno;
           case 7: {
             const fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
 
             if (this.fds[fd] != undefined) {
               set_error(wasi.ERRNO_SUCCESS);
-              continue loop;
+              break switcher;
             } else {
               set_error(wasi.ERRNO_BADF);
-              continue loop;
+              break switcher;
             }
           }
           // fd_allocate: (fd: u32, offset: u64, len: u64) => errno;
@@ -171,10 +172,10 @@ export class WASIFarmPark {
 
             if (this.fds[fd] != undefined) {
               set_error(this.fds[fd].fd_allocate(offset, len));
-              continue loop;
+              break switcher;
             } else {
               set_error(wasi.ERRNO_BADF);
-              continue loop;
+              break switcher;
             }
           }
           // fd_close: (fd: u32) => errno;
@@ -183,10 +184,10 @@ export class WASIFarmPark {
 
             if (this.fds[fd] != undefined) {
               set_error(this.fds[fd].fd_close());
-              continue loop;
+              break switcher;
             } else {
               set_error(wasi.ERRNO_BADF);
-              continue loop;
+              break switcher;
             }
           }
           // fd_datasync: (fd: u32) => errno;
@@ -195,10 +196,10 @@ export class WASIFarmPark {
 
             if (this.fds[fd] != undefined) {
               set_error(this.fds[fd].fd_sync());
-              continue loop;
+              break switcher;
             } else {
               set_error(wasi.ERRNO_BADF);
-              continue loop;
+              break switcher;
             }
           }
           // fd_fdstat_get: (fd: u32) => [wasi.Fdstat(u32 * 6)], errno];
@@ -214,10 +215,10 @@ export class WASIFarmPark {
                 Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset + 2, fdstat.fs_rights_inherited);
               }
               set_error(ret);
-              continue loop;
+              break switcher;
             } else {
               set_error(wasi.ERRNO_BADF);
-              continue loop;
+              break switcher;
             }
           }
           // fd_fdstat_set_flags: (fd: u32, flags: u16) => errno;
@@ -227,10 +228,10 @@ export class WASIFarmPark {
 
             if (this.fds[fd] != undefined) {
               set_error(this.fds[fd].fd_fdstat_set_flags(flags));
-              continue loop;
+              break switcher;
             } else {
               set_error(wasi.ERRNO_BADF);
-              continue loop;
+              break switcher;
             }
           }
           // fd_fdstat_set_rights: (fd: u32, fs_rights_base: u64, fs_rights_inheriting: u64) => errno;
@@ -241,10 +242,10 @@ export class WASIFarmPark {
 
             if (this.fds[fd] != undefined) {
               set_error(this.fds[fd].fd_fdstat_set_rights(fs_rights_base, fs_rights_inheriting));
-              continue loop;
+              break switcher;
             } else {
               set_error(wasi.ERRNO_BADF);
-              continue loop;
+              break switcher;
             }
           }
           // fd_filestat_get: (fd: u32) => [wasi.Filestat(u32 * 16)], errno];
@@ -264,10 +265,10 @@ export class WASIFarmPark {
                 Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset + 7, filestat.ctim);
               }
               set_error(ret);
-              continue loop;
+              break switcher;
             } else {
               set_error(wasi.ERRNO_BADF);
-              continue loop;
+              break switcher;
             }
           }
           // fd_filestat_set_size: (fd: u32, size: u64) => errno;
@@ -277,10 +278,10 @@ export class WASIFarmPark {
 
             if (this.fds[fd] != undefined) {
               set_error(this.fds[fd].fd_filestat_set_size(size));
-              continue loop;
+              break switcher;
             } else {
               set_error(wasi.ERRNO_BADF);
-              continue loop;
+              break switcher;
             }
           }
           // fd_filestat_set_times: (fd: u32, atim: u64, mtim: u64, fst_flags: u16) => errno;
@@ -292,10 +293,10 @@ export class WASIFarmPark {
 
             if (this.fds[fd] != undefined) {
               set_error(this.fds[fd].fd_filestat_set_times(atim, mtim, fst_flags));
-              continue loop;
+              break switcher;
             } else {
               set_error(wasi.ERRNO_BADF);
-              continue loop;
+              break switcher;
             }
           }
           // fd_pread: (fd: u32, iovs_ptr: pointer, iovs_len: u32, offset: u64) => [u32, errno];
@@ -330,7 +331,7 @@ export class WASIFarmPark {
                   set_size(nread);
                   set_data(buffer8);
                   set_error(ret);
-                  continue loop;
+                  break switcher;
                 }
                 buffer8.set(data, nread);
                 nread += data.length;
@@ -342,10 +343,10 @@ export class WASIFarmPark {
               set_size(nread);
               set_data(buffer8);
               set_error(wasi.ERRNO_SUCCESS);
-              continue loop;
+              break switcher;
             } else {
               set_error(wasi.ERRNO_BADF);
-              continue loop;
+              break switcher;
             }
           }
           // fd_prestat_get: (fd: u32) => [wasi.Prestat(u32 * 2)], errno];
@@ -359,10 +360,10 @@ export class WASIFarmPark {
                 Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset + 1, prestat.inner.pr_name.byteLength);
               }
               set_error(ret);
-              continue loop;
+              break switcher;
             } else {
               set_error(wasi.ERRNO_BADF);
-              continue loop;
+              break switcher;
             }
           }
           // fd_prestat_dir_name: (fd: u32, path_len: u32) => [path_ptr: pointer, path_len: u32, errno];
@@ -374,16 +375,16 @@ export class WASIFarmPark {
               const { ret, prestat } = this.fds[fd].fd_prestat_get();
               if (prestat == null) {
                 set_error(ret);
-                continue loop;
+                break switcher;
               }
               const prestat_dir_name = prestat.inner.pr_name;
               await this.allocator.async_write(prestat_dir_name, this.fd_func_sig, fd_func_sig_i32_offset);
 
               set_error(prestat_dir_name.byteLength > path_len ? wasi.ERRNO_NAMETOOLONG : wasi.ERRNO_SUCCESS);
-              continue loop;
+              break switcher;
             } else {
               set_error(wasi.ERRNO_BADF);
-              continue loop;
+              break switcher;
             }
           }
           // fd_pwrite: (fd: u32, write_data: pointer, write_data_len: u32, offset: u64) => [u32, errno];
@@ -402,10 +403,10 @@ export class WASIFarmPark {
               const { ret, nwritten } = this.fds[fd].fd_pwrite(data, offset);
               set_size(nwritten);
               set_error(ret);
-              continue loop;
+              break switcher;
             } else {
               set_error(wasi.ERRNO_BADF);
-              continue loop;
+              break switcher;
             }
           }
           // fd_read: (fd: u32, iovs_ptr: pointer, iovs_len: u32) => [u32, errno];
@@ -440,7 +441,7 @@ export class WASIFarmPark {
                   set_size(nread);
                   set_data(buffer8);
                   set_error(ret);
-                  continue loop;
+                  break switcher;
                 }
                 buffer8.set(data, nread);
                 nread += data.length;
@@ -451,15 +452,461 @@ export class WASIFarmPark {
               set_size(nread);
               set_data(buffer8);
               set_error(wasi.ERRNO_SUCCESS);
-              continue loop;
+              break switcher;
             } else {
               set_error(wasi.ERRNO_BADF);
-              continue loop;
+              break switcher;
+            }
+          }
+          // fd_readdir: (fd: u32, buf_len: u32, cookie: u64) => [buf_ptr: pointer, buf_len: u32, buf_used: u32, errno];
+          case 22: {
+            const fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
+            const buf_len = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 2);
+            let cookie = Atomics.load(func_sig_view_u64, fd_func_sig_u64_offset + 2);
+
+            const array = new Uint8Array(buf_len);
+
+            if (this.fds[fd] != undefined) {
+              const set_data = async (data: Uint8Array) => {
+                await this.allocator.async_write(array, this.fd_func_sig, fd_func_sig_i32_offset);
+              }
+              const set_buf_used = (buf_used: number) => {
+                Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset + 2, buf_used);
+              }
+
+              let buf_used = 0;
+              let offset = 0;
+
+              while (true) {
+                const { ret, dirent } = this.fds[fd].fd_readdir_single(cookie);
+                if (ret != wasi.ERRNO_SUCCESS) {
+                  await set_data(array);
+                  set_buf_used(buf_used);
+                  set_error(ret);
+                  break switcher;
+                }
+                if (dirent == null) {
+                  break;
+                }
+
+                if (buf_len - buf_used < dirent.head_length()) {
+                  buf_used = buf_len;
+                  break;
+                }
+
+                const head_bytes = new ArrayBuffer(dirent.head_length());
+                dirent.write_head_bytes(new DataView(head_bytes), 0);
+                array.set(
+                  new Uint8Array(head_bytes).slice(
+                    0,
+                    Math.min(head_bytes.byteLength, buf_len - buf_used),
+                  ),
+                  offset,
+                );
+                offset += dirent.head_length();
+                buf_used += dirent.head_length();
+
+                if (buf_len - buf_used < dirent.name_length()) {
+                  buf_used = buf_len;
+                  break;
+                }
+
+                dirent.write_name_bytes(array, offset, buf_len - buf_used);
+                offset += dirent.name_length();
+                buf_used += dirent.name_length();
+
+                cookie = dirent.d_next;
+              }
+
+              await set_data(array);
+              set_buf_used(buf_used);
+              set_error(wasi.ERRNO_SUCCESS);
+              break switcher;
+            } else {
+              set_error(wasi.ERRNO_BADF);
+              break switcher;
+            }
+          }
+          // fd_renumber: (fd: u32, to: u32) => errno;
+          case 23: {
+            const fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
+            const to = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 2);
+
+            // toは、lockされているだけなので、待つ
+            if (fd_n != fd) {
+              const { value } = Atomics.waitAsync(lock_view, fd * 2 + 1, 1);
+              if (value instanceof Promise) {
+                await value;
+              }
+              break switcher;
+            }
+
+            if (this.fds[fd] != undefined && this.fds[to] != undefined) {
+              const ret = this.fds[to].fd_close();
+              if (ret != wasi.ERRNO_SUCCESS) {
+                set_error(ret);
+                break switcher;
+              }
+              this.fds[to] = this.fds[fd];
+              this.fds[fd] = undefined;
+              set_error(wasi.ERRNO_SUCCESS);
+              break switcher;
+            } else {
+              set_error(wasi.ERRNO_BADF);
+              break switcher;
+            }
+          }
+          // fd_seek: (fd: u32, offset: i64, whence: u8) => [u64, errno];
+          case 24: {
+            const fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
+            const offset = Atomics.load(func_sig_view_u64, fd_func_sig_u64_offset + 1);
+            const whence = Atomics.load(func_sig_view_u8, fd_func_sig_u8_offset + 16);
+
+            if (this.fds[fd] != undefined) {
+              const set_offset = (offset: bigint) => {
+                Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset, offset);
+              }
+
+              const { ret, offset: new_offset } = this.fds[fd].fd_seek(offset, whence);
+              set_offset(new_offset);
+              set_error(ret);
+              break switcher;
+            } else {
+              set_error(wasi.ERRNO_BADF);
+              break switcher;
+            }
+          }
+          // fd_sync: (fd: u32) => errno;
+          case 25: {
+            const fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
+
+            if (this.fds[fd] != undefined) {
+              set_error(this.fds[fd].fd_sync());
+              break switcher;
+            } else {
+              set_error(wasi.ERRNO_BADF);
+              break switcher;
+            }
+          }
+          // fd_tell: (fd: u32) => [u64, errno];
+          case 26: {
+            const fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
+
+            if (this.fds[fd] != undefined) {
+              const set_offset = (offset: bigint) => {
+                Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset, offset);
+              }
+
+              const { ret, offset } = this.fds[fd].fd_tell();
+              set_offset(offset);
+              set_error(ret);
+              break switcher;
+            } else {
+              set_error(wasi.ERRNO_BADF);
+              break switcher;
+            }
+          }
+          // fd_write: (fd: u32, write_data: pointer, write_data_len: u32) => [u32, errno];
+          case 27: {
+            const fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
+            const write_data_ptr = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 2);
+            const write_data_len = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 3);
+
+            if (this.fds[fd] != undefined) {
+              const set_nwritten = (nwritten: number) => {
+                Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, nwritten);
+              }
+
+              const data = new Uint8Array(this.allocator.get_memory(write_data_ptr, write_data_len));
+              const { ret, nwritten } = this.fds[fd].fd_write(data);
+              set_nwritten(nwritten);
+              set_error(ret);
+              break switcher;
+            } else {
+              set_error(wasi.ERRNO_BADF);
+              break switcher;
+            }
+          }
+          // path_create_directory: (fd: u32, path_ptr: pointer, path_len: u32) => errno;
+          case 28: {
+            const fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
+            const path_ptr = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 2);
+            const path_len = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 3);
+
+            if (this.fds[fd] != undefined) {
+              const path = new Uint8Array(this.allocator.get_memory(path_ptr, path_len));
+              const path_str = new TextDecoder().decode(path);
+              set_error(this.fds[fd].path_create_directory(path_str));
+              break switcher;
+            } else {
+              set_error(wasi.ERRNO_BADF);
+              break switcher;
+            }
+          }
+          // path_filestat_get: (fd: u32, flags: u32, path_ptr: pointer, path_len: u32) => [wasi.Filestat(u32 * 16), errno];
+          case 29: {
+            const fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
+            const flags = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 2);
+            const path_ptr = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 3);
+            const path_len = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 4);
+
+            if (this.fds[fd] != undefined) {
+              const path = new Uint8Array(this.allocator.get_memory(path_ptr, path_len));
+              const path_str = new TextDecoder().decode(path);
+              const { ret, filestat } = this.fds[fd].path_filestat_get(flags, path_str);
+              if (filestat != null) {
+                Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset, filestat.dev);
+                Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset + 1, filestat.ino);
+                Atomics.store(func_sig_view_u8, fd_func_sig_u8_offset + 16, filestat.filetype);
+                Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset + 3, filestat.nlink);
+                Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset + 4, filestat.size);
+                Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset + 5, filestat.atim);
+                Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset + 6, filestat.mtim);
+                Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset + 7, filestat.ctim);
+              }
+              set_error(ret);
+              break switcher;
+            } else {
+              set_error(wasi.ERRNO_BADF);
+              break switcher;
+            }
+          }
+          // path_filestat_set_times: (fd: u32, flags: u32, path_ptr: pointer, path_len: u32, atim: u64, mtim: u64, fst_flags: u16) => errno;
+          case 30: {
+            const fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
+            const flags = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 2);
+            const path_ptr = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 3);
+            const path_len = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 4);
+            const atim = Atomics.load(func_sig_view_u64, fd_func_sig_u64_offset + 3);
+            const mtim = Atomics.load(func_sig_view_u64, fd_func_sig_u64_offset + 4);
+            const fst_flags = Atomics.load(func_sig_view_u16, fd_func_sig_u16_offset + 12);
+
+            if (this.fds[fd] != undefined) {
+              const path = new Uint8Array(this.allocator.get_memory(path_ptr, path_len));
+              const path_str = new TextDecoder().decode(path);
+              set_error(this.fds[fd].path_filestat_set_times(flags, path_str, atim, mtim, fst_flags));
+              break switcher;
+            } else {
+              set_error(wasi.ERRNO_BADF);
+              break switcher;
+            }
+          }
+          // path_link: (old_fd: u32, old_flags: u32, old_path_ptr: pointer, old_path_len: u32, new_fd: u32, new_path_ptr: pointer, new_path_len: u32) => errno;
+          case 31: {
+            const old_fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
+            const old_flags = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 2);
+            const old_path_ptr = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 3);
+            const old_path_len = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 4);
+            const new_fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 5);
+            const new_path_ptr = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 6);
+            const new_path_len = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 7);
+
+            // new_fdは、lockされているだけなので、待つ
+            if (fd_n != old_fd) {
+              const { value } = Atomics.waitAsync(lock_view, old_fd * 2 + 1, 1);
+              if (value instanceof Promise) {
+                await value;
+              }
+              break switcher;
+            }
+
+            if (this.fds[old_fd] != undefined && this.fds[new_fd] != undefined) {
+              const old_path = new Uint8Array(this.allocator.get_memory(old_path_ptr, old_path_len));
+              const old_path_str = new TextDecoder().decode(old_path);
+              const new_path = new Uint8Array(this.allocator.get_memory(new_path_ptr, new_path_len));
+              const new_path_str = new TextDecoder().decode(new_path);
+              const { ret, inode_obj } = this.fds[old_fd].path_lookup(
+                old_path_str,
+                old_flags,
+              );
+              if (inode_obj == null) {
+                set_error(ret);
+                break switcher;
+              }
+              set_error(this.fds[new_fd].path_link(new_path_str ,inode_obj, false));
+              break switcher;
+            } else {
+              set_error(wasi.ERRNO_BADF);
+              break switcher;
+            }
+          }
+          // path_open: (fd: u32, dirflags: u32, path_ptr: pointer, path_len: u32, oflags: u32, fs_rights_base: u64, fs_rights_inheriting: u64, fs_flags: u16, fdflags: u16) => [u32, errno];
+          case 32: {
+            const fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
+            const dirflags = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 2);
+            const path_ptr = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 3);
+            const path_len = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 4);
+            const oflags = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 5);
+            const fs_rights_base = Atomics.load(func_sig_view_u64, fd_func_sig_u64_offset + 3);
+            const fs_rights_inheriting = Atomics.load(func_sig_view_u64, fd_func_sig_u64_offset + 4);
+            const fs_flags = Atomics.load(func_sig_view_u16, fd_func_sig_u16_offset + 20);
+            const fd_flags = Atomics.load(func_sig_view_u16, fd_func_sig_u16_offset + 21);
+
+            if (this.fds[fd] != undefined) {
+              const path = new Uint8Array(this.allocator.get_memory(path_ptr, path_len));
+              const path_str = new TextDecoder().decode(path);
+              debug.log("path_open", path_str);
+              const { ret, fd_obj } = this.fds[fd].path_open(
+                dirflags,
+                path_str,
+                oflags,
+                fs_rights_base,
+                fs_rights_inheriting,
+                fd_flags,
+              );
+              if (ret != wasi.ERRNO_SUCCESS) {
+                set_error(ret);
+                break switcher;
+              }
+              this.fds.push(fd_obj);
+              const opened_fd = this.fds.length - 1;
+              const set_fd = (fd: number) => {
+                Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, fd);
+              }
+              set_fd(opened_fd);
+              set_error(wasi.ERRNO_SUCCESS);
+              break switcher;
+            } else {
+              set_error(wasi.ERRNO_BADF);
+              break switcher;
+            }
+          }
+          // path_readlink: (fd: u32, path_ptr: pointer, path_len: u32, buf_len: u32) => [buf_len: u32, data_ptr: pointer, data_len: u32, errno];
+          case 33: {
+            const fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
+            const path_ptr = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 2);
+            const path_len = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 3);
+            const buf_len = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 5);
+
+            if (this.fds[fd] != undefined) {
+              const set_nread = (nread: number) => {
+                Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, nread);
+              }
+
+              const path = new Uint8Array(this.allocator.get_memory(path_ptr, path_len));
+              const path_str = new TextDecoder().decode(path);
+              debug.log("path_readlink", path_str);
+              const { ret, data } = this.fds[fd].path_readlink(path_str);
+              if (data != null) {
+                const data_buf = new TextEncoder().encode(data);
+                if (data_buf.byteLength > buf_len) {
+                  set_nread(buf_len);
+                  set_error(wasi.ERRNO_BADF);
+                  break switcher;
+                }
+                await this.allocator.async_write(data_buf, this.fd_func_sig, fd_func_sig_i32_offset + 1);
+                set_nread(data_buf.byteLength);
+              }
+              set_error(ret);
+              break switcher;
+            } else {
+              set_error(wasi.ERRNO_BADF);
+              break switcher;
+            }
+          }
+          // path_remove_directory: (fd: u32, path_ptr: pointer, path_len: u32) => errno;
+          case 34: {
+            const fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
+            const path_ptr = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 2);
+            const path_len = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 3);
+
+            if (this.fds[fd] != undefined) {
+              const path = new Uint8Array(this.allocator.get_memory(path_ptr, path_len));
+              const path_str = new TextDecoder().decode(path);
+              set_error(this.fds[fd].path_remove_directory(path_str));
+              break switcher;
+            } else {
+              set_error(wasi.ERRNO_BADF);
+              break switcher;
+            }
+          }
+          // path_rename: (old_fd: u32, old_path_ptr: pointer, old_path_len: u32, new_fd: u32, new_path_ptr: pointer, new_path_len: u32) => errno;
+          case 35: {
+            const fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
+            const old_path_ptr = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 2);
+            const old_path_len = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 3);
+            const new_fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 4);
+            const new_path_ptr = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 5);
+            const new_path_len = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 6);
+
+            // new_fdは、lockされているだけなので、待つ
+            if (fd_n != fd) {
+              const { value } = Atomics.waitAsync(lock_view, fd * 2 + 1, 1);
+              if (value instanceof Promise) {
+                await value;
+              }
+              break switcher;
+            }
+
+            if (this.fds[fd] != undefined && this.fds[new_fd] != undefined) {
+              const old_path = new Uint8Array(this.allocator.get_memory(old_path_ptr, old_path_len));
+              const old_path_str = new TextDecoder().decode(old_path);
+              const new_path = new Uint8Array(this.allocator.get_memory(new_path_ptr, new_path_len));
+              const new_path_str = new TextDecoder().decode(new_path);
+              let { ret, inode_obj } = this.fds[fd].path_unlink(old_path_str);
+              if (inode_obj == null) {
+                set_error(ret);
+                break switcher;
+              }
+              ret = this.fds[new_fd].path_link(new_path_str, inode_obj, true);
+              if (ret != wasi.ERRNO_SUCCESS) {
+                if (
+                  this.fds[fd].path_link(old_path_str, inode_obj, true) != wasi.ERRNO_SUCCESS
+                ) {
+                  throw "path_link should always return success when relinking an inode back to the original place";
+                }
+              }
+              set_error(ret);
+              break switcher;
+            } else {
+              set_error(wasi.ERRNO_BADF);
+              break switcher;
+            }
+          }
+          // path_symlink: (old_path_ptr: pointer, old_path_len: u32, fd: u32, new_path_ptr: pointer, new_path_len: u32) => errno;
+          case 36: {
+            const old_path_ptr = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
+            const old_path_len = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 2);
+            const fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 3);
+            const new_path_ptr = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 4);
+            const new_path_len = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 5);
+
+            if (this.fds[fd] != undefined) {
+              const old_path = new Uint8Array(this.allocator.get_memory(old_path_ptr, old_path_len));
+              const old_path_str = new TextDecoder().decode(old_path);
+              const new_path = new Uint8Array(this.allocator.get_memory(new_path_ptr, new_path_len));
+              const new_path_str = new TextDecoder().decode(new_path);
+              set_error(wasi.ERRNO_NOTSUP);
+              break switcher;
+            } else {
+              set_error(wasi.ERRNO_BADF);
+              break switcher;
+            }
+          }
+          // path_unlink_file: (fd: u32, path_ptr: pointer, path_len: u32) => errno;
+          case 37: {
+            const fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
+            const path_ptr = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 2);
+            const path_len = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 3);
+
+            if (this.fds[fd] != undefined) {
+              const path = new Uint8Array(this.allocator.get_memory(path_ptr, path_len));
+              const path_str = new TextDecoder().decode(path);
+              set_error(this.fds[fd].path_unlink_file(path_str));
+              break switcher;
+            } else {
+              set_error(wasi.ERRNO_BADF);
+              break switcher;
             }
           }
           default: {
             throw new Error("Unknown function");
           }
+        }
+
+        const old_call_lock = Atomics.exchange(lock_view, lock_offset + 1, 0);
+        if (old_call_lock !== 0) {
+          throw new Error("Call is already set");
         }
       } catch (e) {
         console.error(e);
@@ -468,8 +915,6 @@ export class WASIFarmPark {
         Atomics.exchange(lock_view, fd_n, 0);
         const func_sig_view = new Int32Array(this.fd_func_sig);
         Atomics.exchange(func_sig_view, fd_func_sig_i32_offset + 16, -1);
-
-        continue loop;
       }
     }
   }

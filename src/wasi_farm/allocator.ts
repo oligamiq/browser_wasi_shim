@@ -134,7 +134,10 @@ export class Allocator {
     Atomics.store(memory_view, ret_ptr + 1, len);
   }
 
-  free() {
+  free(
+    pointer: number,
+    len: number
+  ) {
     Atomics.sub(new Int32Array(this.share_arrays_memory), 1, 1);
   }
 
