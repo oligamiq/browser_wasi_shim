@@ -308,7 +308,7 @@ export class WASIFarmPark {
               break switcher;
             }
           }
-          // fd_pread: (fd: u32, iovs_ptr: pointer, iovs_len: u32, offset: u64) => [u32, errno];
+          // fd_pread: (fd: u32, iovs_ptr: pointer, iovs_len: u32, offset: u64) => [u32, data_ptr, errno];
           case 17: {
             const fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
             const iovs_ptr = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 2);
