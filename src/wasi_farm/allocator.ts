@@ -42,6 +42,7 @@ export class Allocator {
     data: ArrayBufferLike,
     memory: SharedArrayBuffer,
     // ptr, len
+    // I32Arrayのret_ptrを渡す
     ret_ptr: number,
   ): Promise<void> {
     while (true) {
