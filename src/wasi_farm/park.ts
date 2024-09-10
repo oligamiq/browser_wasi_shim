@@ -4,13 +4,9 @@ import * as wasi from "../wasi_defs.js";
 import { Allocator } from "./allocator.js";
 import { WASIFarmRef } from "./ref.js";
 
-const fd_func_sig_size: number = 18;
+export const fd_func_sig_size: number = 18;
 
 export class WASIFarmPark {
-  // This is copy
-  args: Array<string>;
-  // This is copy
-  env: Array<string>;
   // This is Proxy
   fds: Array<Fd>;
 
@@ -80,10 +76,10 @@ export class WASIFarmPark {
   // Alignが面倒なので、u32 * 16 + 4にする
   // つまり1個のサイズは68byte
 
+  listen_fds: Array<Promise<void>>;
+
   fd_func_sig: SharedArrayBuffer;
-  constructor([args, env, fds]: [Array<string>, Array<string>, Array<Fd>]) {
-    this.args = args;
-    this.env = env;
+  constructor(fds: Array<Fd>) {
     this.fds = fds;
 
     const fds_len = fds.length;
@@ -109,12 +105,18 @@ export class WASIFarmPark {
     if (fd >= 128) {
       throw new Error("fd is too big. expand is not supported yet");
     }
-    this.listen_fd(fd);
+    this.listen_fds.push(this.listen_fd(fd));
   }
 
   /// listener
   listen() {
-
+    let n = 0;
+    for (const fd of this.fds) {
+      if (fd != undefined) {
+        this.listen_fds.push(this.listen_fd(n));
+      }
+      n++;
+    }
   }
 
   // workerでインスタンス化するより先に呼び出す
@@ -133,6 +135,7 @@ export class WASIFarmPark {
     const errno_offset = fd_func_sig_i32_offset + (fd_func_sig_size - 1);
     const lock_offset = fd_n * 2;
     Atomics.store(lock_view, lock_offset, 0);
+    Atomics.store(lock_view, lock_offset + 1, 0);
     Atomics.store(func_sig_view_i32, fd_func_sig_i32_offset + errno_offset, -1);
 
     while (true) {
@@ -146,11 +149,6 @@ export class WASIFarmPark {
         }
         if (lock === "timed-out") {
           throw new Error("timed-out");
-        }
-
-        const old = Atomics.exchange(lock_view, lock_offset + 1, 0);
-        if (old !== 1) {
-          throw new Error("Call is already set");
         }
 
         const set_error = (errno: number) => {
@@ -945,11 +943,15 @@ export class WASIFarmPark {
         if (old_call_lock !== 0) {
           throw new Error("Call is already set");
         }
+        const n = Atomics.notify(lock_view, lock_offset + 1);
+        if (n !== 1) {
+          throw new Error("notify number is not 1");
+        }
       } catch (e) {
         console.error(e);
 
         const lock_view = new Int32Array(this.lock_fds);
-        Atomics.exchange(lock_view, fd_n, 0);
+        Atomics.exchange(lock_view, fd_n * 2 + 1, 0);
         const func_sig_view = new Int32Array(this.fd_func_sig);
         Atomics.exchange(func_sig_view, fd_func_sig_i32_offset + 16, -1);
       }

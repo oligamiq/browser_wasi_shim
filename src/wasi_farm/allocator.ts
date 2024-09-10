@@ -67,6 +67,7 @@ export class Allocator {
 
       // lockを解放する
       Atomics.store(view, 0, 0);
+      Atomics.notify(view, 0, 1);
 
       break;
     }
@@ -93,6 +94,7 @@ export class Allocator {
 
       // lockを解放する
       Atomics.store(view, 0, 0);
+      Atomics.notify(view, 0, 1);
 
       break;
     }

@@ -8,7 +8,7 @@ export default class WASIFarm {
   args: Array<string>;
   env: Array<string>;
   fds: Array<Fd>;
-  sockets: WASIFarmPark[];
+  park: WASIFarmPark;
 
   constructor(
     args: Array<string>,
@@ -21,13 +21,12 @@ export default class WASIFarm {
     this.args = args;
     this.env = env;
     this.fds = fds;
-    this.sockets = [];
+    this.park = new WASIFarmPark(this.fds_ref());
+
+    this.park.listen();
   }
 
-  member_ref(): [Array<string>, Array<string>, Array<Fd>] {
-    const args = [...this.args];
-    const env = [...this.env];
-
+  fds_ref(): Array<Fd> {
     const fds = new Proxy([] as Array<Fd>, {
       get: (_, prop) => {
         console.log("fds", prop);
@@ -41,14 +40,10 @@ export default class WASIFarm {
       }
     });
 
-    return [args, env, fds];
+    return fds;
   }
 
   get_ref(): WASIFarmRef {
-    let socket = new WASIFarmPark(this.member_ref());
-
-    this.sockets.push(socket);
-
-    return socket.get_ref();
+    return this.park.get_ref();
   }
 }
