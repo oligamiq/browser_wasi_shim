@@ -2,7 +2,7 @@ import WASI, { WASIProcExit } from "./wasi.js";
 export { WASI, WASIProcExit };
 import WASIFarm from "./wasi_farm/farm.js";
 export { WASIFarm };
-import { WASIFarmRef } from "./wasi_farm/ref/ref.js";
+import { WASIFarmRef } from "./wasi_farm/ref.js";
 export { WASIFarmRef };
 import { WASIFarmPark } from "./wasi_farm/park.js";
 export { WASIFarmPark };
