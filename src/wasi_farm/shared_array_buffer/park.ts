@@ -219,13 +219,10 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
             const fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
             const flags = Atomics.load(func_sig_view_u16, fd_func_sig_u16_offset + 4);
 
-            if (this.fds[fd] != undefined) {
-              set_error(this.fds[fd].fd_fdstat_set_flags(flags));
-              break switcher;
-            } else {
-              set_error(wasi.ERRNO_BADF);
-              break switcher;
-            }
+            const error = this.fd_fdstat_set_flags(fd, flags);
+
+            set_error(error);
+            break switcher;
           }
           // fd_fdstat_set_rights: (fd: u32, fs_rights_base: u64, fs_rights_inheriting: u64) => errno;
           case 13: {
@@ -233,21 +230,18 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
             const fs_rights_base = Atomics.load(func_sig_view_u64, fd_func_sig_u64_offset + 1);
             const fs_rights_inheriting = Atomics.load(func_sig_view_u64, fd_func_sig_u64_offset + 2);
 
-            if (this.fds[fd] != undefined) {
-              set_error(this.fds[fd].fd_fdstat_set_rights(fs_rights_base, fs_rights_inheriting));
-              break switcher;
-            } else {
-              set_error(wasi.ERRNO_BADF);
-              break switcher;
-            }
+            const error = this.fd_fdstat_set_rights(fd, fs_rights_base, fs_rights_inheriting);
+
+            set_error(error);
+            break switcher;
           }
           // fd_filestat_get: (fd: u32) => [wasi.Filestat(u32 * 16)], errno];
           case 14: {
             const fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
 
-            if (this.fds[fd] != undefined) {
-              const { ret, filestat } = this.fds[fd].fd_filestat_get();
-              if (filestat != null) {
+            const [ filestat, ret ] = this.fd_filestat_get(fd);
+
+            if (filestat != null) {
                 Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset, filestat.dev);
                 Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset + 1, filestat.ino);
                 Atomics.store(func_sig_view_u8, fd_func_sig_u8_offset + 16, filestat.filetype);
@@ -256,26 +250,20 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
                 Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset + 5, filestat.atim);
                 Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset + 6, filestat.mtim);
                 Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset + 7, filestat.ctim);
-              }
-              set_error(ret);
-              break switcher;
-            } else {
-              set_error(wasi.ERRNO_BADF);
-              break switcher;
             }
+
+            set_error(ret);
+            break switcher;
           }
           // fd_filestat_set_size: (fd: u32, size: u64) => errno;
           case 15: {
             const fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
             const size = Atomics.load(func_sig_view_u64, fd_func_sig_u64_offset + 1);
 
-            if (this.fds[fd] != undefined) {
-              set_error(this.fds[fd].fd_filestat_set_size(size));
-              break switcher;
-            } else {
-              set_error(wasi.ERRNO_BADF);
-              break switcher;
-            }
+            const error = this.fd_filestat_set_size(fd, size);
+
+            set_error(error);
+            break switcher;
           }
           // fd_filestat_set_times: (fd: u32, atim: u64, mtim: u64, fst_flags: u16) => errno;
           case 16: {
@@ -284,13 +272,10 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
             const mtim = Atomics.load(func_sig_view_u64, fd_func_sig_u64_offset + 2);
             const fst_flags = Atomics.load(func_sig_view_u16, fd_func_sig_u16_offset + 12);
 
-            if (this.fds[fd] != undefined) {
-              set_error(this.fds[fd].fd_filestat_set_times(atim, mtim, fst_flags));
-              break switcher;
-            } else {
-              set_error(wasi.ERRNO_BADF);
-              break switcher;
-            }
+            const error = this.fd_filestat_set_times(fd, atim, mtim, fst_flags);
+
+            set_error(error);
+            break switcher;
           }
           // fd_pread: (fd: u32, iovs_ptr: pointer, iovs_len: u32, offset: u64) => [u32, data_ptr, errno];
           case 17: {
@@ -301,51 +286,27 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
             if (iovs_ptr_len != iovs_len * 8) {
               throw new Error("iovs_ptr_len is not iovs_len * 8");
             }
-            let offset = Atomics.load(func_sig_view_u64, fd_func_sig_u64_offset + 3);
+            const offset = Atomics.load(func_sig_view_u64, fd_func_sig_u64_offset + 3);
             const data = new Uint32Array(this.allocator.get_memory(iovs_ptr, iovs_len * 8));
             this.allocator.free(iovs_ptr, iovs_len * 8);
 
-            if (this.fds[fd] != undefined) {
-              const iovecs = new Array<wasi.Iovec>();
-              for (let i = 0; i < iovs_len; i++) {
-                const iovec = new wasi.Iovec();
-                iovec.buf = data[i * 2];
-                iovec.buf_len = data[i * 2 + 1];
-                iovecs.push(iovec);
-              }
+            const [[nread, buffer8], error] = this.fd_pread(fd, data, iovs_len, offset);
 
-              let nread = 0;
-              const set_size = (size: number) => {
-                Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, size);
-              }
-              const set_data = async (data: Uint8Array) => {
-                await this.allocator.async_write(data, this.fd_func_sig, fd_func_sig_i32_offset + 1);
-              }
-              const sum_len = iovecs.reduce((acc, iovec) => acc + iovec.buf_len, 0);
-              const buffer8 = new Uint8Array(sum_len);
-              for (const iovec of iovecs) {
-                const { ret, data } = this.fds[fd].fd_pread(iovec.buf_len, offset);
-                if (ret != wasi.ERRNO_SUCCESS) {
-                  set_size(nread);
-                  await set_data(buffer8);
-                  set_error(ret);
-                  break switcher;
-                }
-                buffer8.set(data, nread);
-                nread += data.length;
-                offset += BigInt(data.length);
-                if (data.length != iovec.buf_len) {
-                  break;
-                }
-              }
-              set_size(nread);
-              await set_data(buffer8);
-              set_error(wasi.ERRNO_SUCCESS);
-              break switcher;
-            } else {
-              set_error(wasi.ERRNO_BADF);
-              break switcher;
+            const set_size = (size: number) => {
+              Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, size);
             }
+            const set_data = async (data: Uint8Array) => {
+              await this.allocator.async_write(data, this.fd_func_sig, fd_func_sig_i32_offset + 1);
+            }
+
+            if (nread != undefined) {
+              set_size(nread);
+            }
+            if (buffer8 != undefined) {
+              set_data(buffer8);
+            }
+            set_error(error);
+            break switcher;
           }
           // fd_prestat_get: (fd: u32) => [wasi.Prestat(u32 * 2)], errno];
           case 18: {

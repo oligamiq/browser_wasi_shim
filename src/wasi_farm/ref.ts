@@ -11,7 +11,7 @@ export abstract class WASIFarmRef {
   abstract fd_filestat_get(fd: number): [wasi.Filestat | undefined, number];
   abstract fd_filestat_set_size(fd: number, size: bigint): number;
   abstract fd_filestat_set_times(fd: number, atim: bigint, mtim: bigint, fst_flags: number): number;
-  abstract fd_pread(fd: number, iovs:Uint32Array, offset: bigint): [[number, Uint8Array] | undefined, number];
+  abstract fd_pread(fd: number, iovs: Uint32Array, offset: bigint): [[number, Uint8Array] | undefined, number];
   abstract fd_prestat_get(fd: number): [[number, number] | undefined, number];
   abstract fd_prestat_dir_name(fd: number, path_len: number): [Uint8Array | undefined, number];
   abstract fd_pwrite(fd: number, iovs: Uint32Array, offset: bigint): [number, number];
