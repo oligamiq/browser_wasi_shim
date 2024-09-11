@@ -140,6 +140,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     const func_sig_view_i32 = new Int32Array(this.fd_func_sig);
     const fd_func_sig_i32_offset = fd * fd_func_sig_size;
     const errno_offset = fd_func_sig_i32_offset + (fd_func_sig_size - 1);
+    console.log("get_error: offset", errno_offset);
     return Atomics.load(func_sig_view_i32, errno_offset);
   }
 
@@ -759,6 +760,8 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     this.call_fd_func(fd);
 
     const error = this.get_error(fd);
+
+    console.log("fd_write: ref: error", error);
 
     if (error === wasi.ERRNO_BADF) {
       this.release_fd(fd);

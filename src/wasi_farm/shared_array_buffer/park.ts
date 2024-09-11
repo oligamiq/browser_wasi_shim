@@ -162,7 +162,8 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
         console.log("called", fd_n, lock_offset + 1);
 
         const set_error = (errno: number) => {
-          Atomics.store(func_sig_view_i32, fd_func_sig_i32_offset + errno_offset, errno);
+          console.log("set_error", errno, "pointer", fd_func_sig_i32_offset + errno_offset);
+          Atomics.store(func_sig_view_i32, errno_offset, errno);
         }
 
         const func_number = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset);
@@ -459,6 +460,8 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
             console.log("write_data", data);
 
             const [nwritten, error] = this.fd_write(fd, data);
+
+            console.log("fd_write: park: error", error);
 
             if (nwritten) {
               Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, nwritten);
