@@ -488,7 +488,7 @@ export class WASIFarmPark {
 
             if (this.fds[fd] != undefined) {
               const set_data = async (data: Uint8Array) => {
-                await this.allocator.async_write(array, this.fd_func_sig, fd_func_sig_i32_offset);
+                await this.allocator.async_write(data, this.fd_func_sig, fd_func_sig_i32_offset);
               }
               const set_buf_used = (buf_used: number) => {
                 Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset + 2, buf_used);
@@ -553,13 +553,14 @@ export class WASIFarmPark {
             const to = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 2);
 
             // toは、lockされているだけなので、待つ
-            if (fd_n != fd) {
-              const { value } = Atomics.waitAsync(lock_view, fd * 2 + 1, 1);
-              if (value instanceof Promise) {
-                await value;
-              }
-              break switcher;
-            }
+            // そもそもロックされるだけで呼び出す必要はないので呼び出されることはない
+            // if (fd_n != fd) {
+            //   const { value } = Atomics.waitAsync(lock_view, fd * 2 + 1, 1);
+            //   if (value instanceof Promise) {
+            //     await value;
+            //   }
+            //   break switcher;
+            // }
 
             if (this.fds[fd] != undefined && this.fds[to] != undefined) {
               const ret = this.fds[to].fd_close();
