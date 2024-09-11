@@ -150,7 +150,7 @@ export class Allocator {
     Atomics.store(memory_view, ret_ptr, share_arrays_memory_kept);
     Atomics.store(memory_view, ret_ptr + 1, len);
 
-    // console.log("allocator::", this);
+    // console.log("allocator: allocate", share_arrays_memory_kept, len);
 
     return [share_arrays_memory_kept, len];
   }
@@ -162,6 +162,8 @@ export class Allocator {
     len: number
   ) {
     Atomics.sub(new Int32Array(this.share_arrays_memory), 1, 1);
+
+    // console.log("allocator: free", pointer, len);
   }
 
   get_memory(

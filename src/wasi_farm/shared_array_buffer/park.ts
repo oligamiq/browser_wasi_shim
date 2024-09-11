@@ -348,7 +348,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
 
             // console.log("fd_prestat_dir_name", new TextDecoder().decode(prestat_dir_name), ret);
 
-            if (prestat_dir_name) {
+            if (prestat_dir_name && ret === wasi.ERRNO_SUCCESS) {
               await this.allocator.async_write(prestat_dir_name, this.fd_func_sig, fd_func_sig_i32_offset);
             }
             set_error(ret);
@@ -679,7 +679,11 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
         }
         const n = Atomics.notify(lock_view, lock_offset + 1);
         if (n !== 1) {
-          throw new Error("notify number is not 1");
+          if (n === 0) {
+            console.warn("notify number is 0. ref is late?");
+          } else {
+            throw new Error("notify number is not 1: " + n);
+          }
         }
       } catch (e) {
         console.error(e);

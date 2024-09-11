@@ -584,6 +584,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     }
 
     const ret_path = this.allocator.get_memory(ret_path_ptr, ret_path_len);
+    this.allocator.free(ret_path_ptr, ret_path_len);
 
     return [ret_path, error];
   }
