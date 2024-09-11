@@ -11,7 +11,7 @@ export default class WASIFarm {
   fds: Array<Fd>;
   park: WASIFarmPark;
 
-  can_array_buffer = true;
+  can_array_buffer;
 
   constructor(
     args: Array<string>,
@@ -27,6 +27,7 @@ export default class WASIFarm {
 
     try {
         new SharedArrayBuffer(4);
+        this.can_array_buffer = true;
     } catch (_) {
         this.can_array_buffer = false;
     }
