@@ -39,7 +39,7 @@ export default class WASIFarm {
     this.park.listen();
   }
 
-  fds_ref(): Array<Fd> {
+  private fds_ref(): Array<Fd> {
     const fds = new Proxy([] as Array<Fd>, {
       get: (_, prop) => {
         console.log("fds", prop);

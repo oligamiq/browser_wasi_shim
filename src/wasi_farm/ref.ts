@@ -1,6 +1,8 @@
 import * as wasi from "wasi_defs.js";
 
 export abstract class WASIFarmRef {
+  abstract get_ref(): WASIFarmRef;
+
   abstract fd_advise(fd: number): number;
   abstract fd_allocate(fd: number, offset: bigint, len: bigint): number;
   abstract fd_close(fd: number): number;

@@ -9,7 +9,7 @@ export const fd_func_sig_size: number = 18;
 
 export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
   // This is Proxy
-  allocator: Allocator;
+  private allocator: Allocator;
 
   // args, envは変更されないので、コピーで良い
   // fdsに依存しない関数は飛ばす
@@ -70,14 +70,14 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
 
   // fdを使いたい際に、ロックする
   // [lock, call_func]
-  lock_fds: SharedArrayBuffer;
+  private lock_fds: SharedArrayBuffer;
   // 一番大きなサイズはu32 * 16 + 1
   // Alignが面倒なので、u32 * 16 + 4にする
   // つまり1個のサイズは68byte
 
-  listen_fds: Array<Promise<void>>;
+  private listen_fds: Array<Promise<void>>;
 
-  fd_func_sig: SharedArrayBuffer;
+  private fd_func_sig: SharedArrayBuffer;
   constructor(fds: Array<Fd>) {
     super(fds);
 
@@ -96,7 +96,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     );
   }
 
-  notify_push_fd(fd: number) {
+  private notify_push_fd(fd: number) {
     if (this.fds[fd] == undefined) {
       throw new Error("fd is not defined");
     }

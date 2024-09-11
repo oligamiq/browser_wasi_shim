@@ -7,13 +7,13 @@ export abstract class WASIFarmPark {
   abstract get_ref(): WASIFarmRef;
   abstract listen(): void;
 
-  fds: Array<Fd>;
+  private fds: Array<Fd>;
 
   constructor(fds: Array<Fd>) {
     this.fds = fds;
   }
 
-  fd_advise(fd: number): number {
+  protected fd_advise(fd: number): number {
     if (this.fds[fd] != undefined) {
       return wasi.ERRNO_SUCCESS;
     } else {
@@ -21,7 +21,7 @@ export abstract class WASIFarmPark {
     }
   }
 
-  fd_allocate(fd: number, offset: bigint, len: bigint): number {
+  protected fd_allocate(fd: number, offset: bigint, len: bigint): number {
     if (this.fds[fd] != undefined) {
       return this.fds[fd].fd_allocate(offset, len);
     } else {
@@ -29,7 +29,7 @@ export abstract class WASIFarmPark {
     }
   }
 
-  fd_close(fd: number): number {
+  protected fd_close(fd: number): number {
     if (this.fds[fd] != undefined) {
       return this.fds[fd].fd_close();
     } else {
@@ -37,7 +37,7 @@ export abstract class WASIFarmPark {
     }
   }
 
-  fd_datasync(fd: number): number {
+  protected fd_datasync(fd: number): number {
     if (this.fds[fd] != undefined) {
       return this.fds[fd].fd_sync();
     } else {
@@ -45,7 +45,7 @@ export abstract class WASIFarmPark {
     }
   }
 
-  fd_fdstat_get(fd: number): [wasi.Fdstat | undefined, number] {
+  protected fd_fdstat_get(fd: number): [wasi.Fdstat | undefined, number] {
     if (this.fds[fd] != undefined) {
       const { ret, fdstat } = this.fds[fd].fd_fdstat_get();
       if (fdstat != null) {
@@ -56,7 +56,7 @@ export abstract class WASIFarmPark {
     return [undefined, wasi.ERRNO_BADF];
   }
 
-  fd_fdstat_set_flags(fd: number, flags: number): number {
+  protected fd_fdstat_set_flags(fd: number, flags: number): number {
     if (this.fds[fd] != undefined) {
       return this.fds[fd].fd_fdstat_set_flags(flags);
     } else {
@@ -64,7 +64,7 @@ export abstract class WASIFarmPark {
     }
   }
 
-  fd_fdstat_set_rights(fd: number, fs_rights_base: bigint, fs_rights_inheriting: bigint): number {
+  protected fd_fdstat_set_rights(fd: number, fs_rights_base: bigint, fs_rights_inheriting: bigint): number {
     if (this.fds[fd] != undefined) {
       return this.fds[fd].fd_fdstat_set_rights(fs_rights_base, fs_rights_inheriting);
     } else {
@@ -72,7 +72,7 @@ export abstract class WASIFarmPark {
     }
   }
 
-  fd_filestat_get(fd: number): [wasi.Filestat | undefined, number] {
+  protected fd_filestat_get(fd: number): [wasi.Filestat | undefined, number] {
     if (this.fds[fd] != undefined) {
       const { ret, filestat } = this.fds[fd].fd_filestat_get();
       if (filestat != null) {
@@ -83,7 +83,7 @@ export abstract class WASIFarmPark {
     return [undefined, wasi.ERRNO_BADF];
   }
 
-  fd_filestat_set_size(fd: number, size: bigint): number {
+  protected fd_filestat_set_size(fd: number, size: bigint): number {
     if (this.fds[fd] != undefined) {
       return this.fds[fd].fd_filestat_set_size(size);
     } else {
@@ -91,7 +91,7 @@ export abstract class WASIFarmPark {
     }
   }
 
-  fd_filestat_set_times(fd: number, atim: bigint, mtim: bigint, fst_flags: number): number {
+  protected fd_filestat_set_times(fd: number, atim: bigint, mtim: bigint, fst_flags: number): number {
     if (this.fds[fd] != undefined) {
       return this.fds[fd].fd_filestat_set_times(atim, mtim, fst_flags);
     } else {
@@ -99,7 +99,7 @@ export abstract class WASIFarmPark {
     }
   }
 
-  fd_pread(fd: number, iovecs: Array<wasi.Iovec>, offset: bigint): [[number, Uint8Array] | undefined, number] {
+  protected fd_pread(fd: number, iovecs: Array<wasi.Iovec>, offset: bigint): [[number, Uint8Array] | undefined, number] {
     if (this.fds[fd] != undefined) {
       let nread = 0;
 
@@ -123,7 +123,7 @@ export abstract class WASIFarmPark {
     }
   }
 
-  fd_prestat_get(fd: number): [wasi.Prestat | undefined, number] {
+  protected fd_prestat_get(fd: number): [wasi.Prestat | undefined, number] {
     if (this.fds[fd] != undefined) {
       const { ret, prestat } = this.fds[fd].fd_prestat_get();
       if (prestat != null) {
@@ -134,7 +134,7 @@ export abstract class WASIFarmPark {
     return [undefined, wasi.ERRNO_BADF];
   }
 
-  fd_prestat_dir_name(fd: number, path_len: number): [Uint8Array | undefined, number] {
+  protected fd_prestat_dir_name(fd: number, path_len: number): [Uint8Array | undefined, number] {
     if (this.fds[fd] != undefined) {
       const { ret, prestat } = this.fds[fd].fd_prestat_get();
       if (prestat) {
@@ -151,7 +151,7 @@ export abstract class WASIFarmPark {
     return [undefined, wasi.ERRNO_BADF];
   }
 
-  fd_pwrite(fd: number, write_data: Uint8Array, offset: bigint): [number | undefined, number] {
+  protected fd_pwrite(fd: number, write_data: Uint8Array, offset: bigint): [number | undefined, number] {
     if (this.fds[fd] != undefined) {
       const { ret, nwritten } = this.fds[fd].fd_pwrite(write_data, offset);
       return [nwritten, ret];
@@ -160,7 +160,7 @@ export abstract class WASIFarmPark {
     }
   }
 
-  fd_read(fd: number, iovecs: Array<wasi.Iovec>): [[number, Uint8Array] | undefined, number] {
+  protected fd_read(fd: number, iovecs: Array<wasi.Iovec>): [[number, Uint8Array] | undefined, number] {
     if (this.fds[fd] != undefined) {
       let nread = 0;
 
@@ -183,7 +183,7 @@ export abstract class WASIFarmPark {
     }
   }
 
-  fd_readdir(fd: number, buf_len: number, cookie: bigint): [[Uint8Array, number] | undefined, number] {
+  protected fd_readdir(fd: number, buf_len: number, cookie: bigint): [[Uint8Array, number] | undefined, number] {
     if (this.fds[fd] != undefined) {
       const array = new Uint8Array(buf_len);
 
@@ -234,7 +234,7 @@ export abstract class WASIFarmPark {
     }
   }
 
-  fd_seek(fd: number, offset: bigint, whence: number): [bigint | undefined, number] {
+  protected fd_seek(fd: number, offset: bigint, whence: number): [bigint | undefined, number] {
     if (this.fds[fd] != undefined) {
       const { ret, offset: new_offset } = this.fds[fd].fd_seek(offset, whence);
       return [new_offset, ret];
@@ -243,7 +243,7 @@ export abstract class WASIFarmPark {
     }
   }
 
-  fd_sync(fd: number): number {
+  protected fd_sync(fd: number): number {
     if (this.fds[fd] != undefined) {
       return this.fds[fd].fd_sync();
     } else {
@@ -251,7 +251,7 @@ export abstract class WASIFarmPark {
     }
   }
 
-  fd_tell(fd: number): [bigint | undefined, number] {
+  protected fd_tell(fd: number): [bigint | undefined, number] {
     if (this.fds[fd] != undefined) {
       const { ret, offset } = this.fds[fd].fd_tell();
       return [offset, ret];
@@ -260,7 +260,7 @@ export abstract class WASIFarmPark {
     }
   }
 
-  fd_write(fd: number, write_data: Uint8Array): [number | undefined, number] {
+  protected fd_write(fd: number, write_data: Uint8Array): [number | undefined, number] {
     if (this.fds[fd] != undefined) {
       const { ret, nwritten } = this.fds[fd].fd_write(write_data);
       return [nwritten, ret];
@@ -269,7 +269,7 @@ export abstract class WASIFarmPark {
     }
   }
 
-  path_create_directory(fd: number, path: string): number {
+  protected path_create_directory(fd: number, path: string): number {
     if (this.fds[fd] != undefined) {
       return this.fds[fd].path_create_directory(path);
     } else {
@@ -277,7 +277,7 @@ export abstract class WASIFarmPark {
     }
   }
 
-  path_filestat_get(fd: number, flags: number, path: string): [wasi.Filestat | undefined, number] {
+  protected path_filestat_get(fd: number, flags: number, path: string): [wasi.Filestat | undefined, number] {
     if (this.fds[fd] != undefined) {
       const { ret, filestat } = this.fds[fd].path_filestat_get(flags, path);
       if (filestat != null) {
@@ -288,7 +288,7 @@ export abstract class WASIFarmPark {
     return [undefined, wasi.ERRNO_BADF];
   }
 
-  path_filestat_set_times(fd: number, flags: number, path: string, atim: bigint, mtim: bigint, fst_flags: number): number {
+  protected path_filestat_set_times(fd: number, flags: number, path: string, atim: bigint, mtim: bigint, fst_flags: number): number {
     if (this.fds[fd] != undefined) {
       return this.fds[fd].path_filestat_set_times(flags, path, atim, mtim, fst_flags);
     } else {
@@ -296,7 +296,7 @@ export abstract class WASIFarmPark {
     }
   }
 
-  path_link(old_fd: number, old_flags: number, old_path: string, new_fd: number, new_path: string): number {
+  protected path_link(old_fd: number, old_flags: number, old_path: string, new_fd: number, new_path: string): number {
     if (this.fds[old_fd] != undefined && this.fds[new_fd] != undefined) {
       const { ret, inode_obj } = this.fds[old_fd].path_lookup(
         old_path,
@@ -311,7 +311,7 @@ export abstract class WASIFarmPark {
     }
   }
 
-  path_open(
+  protected path_open(
     fd: number,
     dirflags: number,
     path: string,
@@ -341,7 +341,7 @@ export abstract class WASIFarmPark {
     }
   }
 
-  path_readlink(fd: number, path: string, buf_len: number): [Uint8Array | undefined, number] {
+  protected path_readlink(fd: number, path: string, buf_len: number): [Uint8Array | undefined, number] {
     if (this.fds[fd] != undefined) {
       debug.log("path_readlink", path);
       const { ret, data } = this.fds[fd].path_readlink(path);
@@ -359,7 +359,7 @@ export abstract class WASIFarmPark {
     }
   }
 
-  path_remove_directory(fd: number, path: string): number {
+  protected path_remove_directory(fd: number, path: string): number {
     if (this.fds[fd] != undefined) {
       return this.fds[fd].path_remove_directory(path);
     } else {
@@ -367,7 +367,7 @@ export abstract class WASIFarmPark {
     }
   }
 
-  path_rename(old_fd: number, old_path: string, new_fd: number, new_path: string): number {
+  protected path_rename(old_fd: number, old_path: string, new_fd: number, new_path: string): number {
     if (this.fds[old_fd] != undefined && this.fds[new_fd] != undefined) {
       // eslint-disable-next-line prefer-const
       let { ret, inode_obj } = this.fds[old_fd].path_unlink(
@@ -392,7 +392,7 @@ export abstract class WASIFarmPark {
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  path_symlink(old_path: string, fd: number, new_path: string): number {
+  protected path_symlink(old_path: string, fd: number, new_path: string): number {
     if (this.fds[fd] != undefined) {
       return wasi.ERRNO_NOTSUP;
     } else {
@@ -400,7 +400,7 @@ export abstract class WASIFarmPark {
     }
   }
 
-  path_unlink_file(fd: number, path: string): number {
+  protected path_unlink_file(fd: number, path: string): number {
     if (this.fds[fd] != undefined) {
       return this.fds[fd].path_unlink_file(path);
     } else {

@@ -18,6 +18,10 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     this.fd_func_sig = fd_func_sig;
   }
 
+  get_ref(): WASIFarmRef {
+    return this;
+  }
+
   lock_fd(fd: number) {
     const view = new Int32Array(this.lock_fds);
     // eslint-disable-next-line no-constant-condition
