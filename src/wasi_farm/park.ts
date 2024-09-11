@@ -164,11 +164,11 @@ export abstract class WASIFarmPark {
     if (this.fds[fd] != undefined) {
       let nread = 0;
 
-      console.log("fd_read: park: iovecs: ", iovecs);
+      // console.log("fd_read: park: iovecs: ", iovecs);
 
       const sum_len = iovecs.reduce((acc, iovec) => acc + iovec.buf_len, 0);
 
-      console.log("fd_read: park: sum_len: ", sum_len);
+      // console.log("fd_read: park: sum_len: ", sum_len);
 
       const buffer8 = new Uint8Array(sum_len);
       for (const iovec of iovecs) {
@@ -183,7 +183,7 @@ export abstract class WASIFarmPark {
         }
       }
 
-      console.log("fd_read: park: nread: ", nread);
+      // console.log("fd_read: park: nread: ", nread);
 
       return [[
         nread,
@@ -341,17 +341,17 @@ export abstract class WASIFarmPark {
         fs_rights_inheriting,
         fs_flags,
       );
-      console.log("path_open: park: ", ret, fd_obj);
+      // console.log("path_open: park: ", ret, fd_obj);
       if (ret != wasi.ERRNO_SUCCESS) {
         return [undefined, ret];
       }
       const len = this.fds.push(fd_obj);
 
-      console.log("path_open: park: len: ", len);
+      // console.log("path_open: park: len: ", len);
 
       const opened_fd = len - 1;
 
-      console.log("path_open: park: ", opened_fd);
+      // console.log("path_open: park: ", opened_fd);
 
       return [opened_fd, wasi.ERRNO_SUCCESS];
     } else {

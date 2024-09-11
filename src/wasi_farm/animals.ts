@@ -324,7 +324,7 @@ export class WASIFarmAnimal {
           );
           const [nread, read_data] = nerad_and_read_data;
 
-          console.log("fd_read: nread", nread, new TextDecoder().decode(read_data));
+          // console.log("fd_read: nread", nread, new TextDecoder().decode(read_data));
 
           // fd_read: ref:  14 30 14
           // animals.ts:325 fd_read: nread 14 Hello, world!
@@ -381,7 +381,7 @@ export class WASIFarmAnimal {
         return ret;
       },
       fd_write(fd: number, iovs_ptr: number, iovs_len: number, nwritten_ptr: number) {
-        console.log("fd_write", fd, iovs_ptr, iovs_len, nwritten_ptr);
+        // console.log("fd_write", fd, iovs_ptr, iovs_len, nwritten_ptr);
 
         const buffer = new DataView(self.inst.exports.memory.buffer);
         const buffer8 = new Uint8Array(self.inst.exports.memory.buffer);
@@ -390,20 +390,20 @@ export class WASIFarmAnimal {
           iovs_ptr,
           iovs_len,
         );
-        console.log("iovecs", iovecs);
+        // console.log("iovecs", iovecs);
         const data = new Uint8Array(iovecs.reduce((acc, iovec) => acc + iovec.buf_len, 0));
-        console.log("data", data);
+        // console.log("data", data);
         let nwritten = 0;
         for (const iovec of iovecs) {
           data.set(buffer8.slice(iovec.buf, iovec.buf + iovec.buf_len), nwritten);
           nwritten += iovec.buf_len;
         }
 
-        console.log("fd_write", fd, new TextDecoder().decode(data));
+        // console.log("fd_write", fd, new TextDecoder().decode(data));
 
         const [written, ret] = self.wasi_farm_ref.fd_write(fd, data);
 
-        console.log("fd_write", fd, ret, written);
+        // console.log("fd_write", fd, ret, written);
 
         if (written) {
           buffer.setUint32(nwritten_ptr, written, true);

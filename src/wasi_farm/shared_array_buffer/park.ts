@@ -92,7 +92,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
 
   /// これをpostMessageで送る
   get_ref(): WASIFarmRef {
-    console.log("listen_fds", this.listen_fds);
+    // console.log("listen_fds", this.listen_fds);
 
     // const view = new Int32Array(this.lock_fds);
     // for (let n = 0; n < this.fds.length; n++) {
@@ -159,7 +159,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
 
         const { value } = Atomics.waitAsync(lock_view, lock_offset + 1, 0);
         if ( value instanceof Promise) {
-          console.log("listen", fd_n, lock_offset + 1);
+          // console.log("listen", fd_n, lock_offset + 1);
           lock = await value;
         } else {
           lock = value;
@@ -168,16 +168,16 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
           throw new Error("timed-out");
         }
 
-        console.log("called", fd_n, lock_offset + 1);
+        // console.log("called", fd_n, lock_offset + 1);
 
         const set_error = (errno: number) => {
-          console.log("set_error", errno, "pointer", errno_offset);
+          // console.log("set_error", errno, "pointer", errno_offset);
           Atomics.store(func_sig_view_i32, errno_offset, errno);
         }
 
         const func_number = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset);
 
-        console.log("func_number", func_number);
+        // console.log("func_number", func_number);
 
         switcher: switch (func_number) {
           // fd_advise: (fd: u32) => errno;
@@ -330,7 +330,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
 
             const [ prestat, ret ] = this.fd_prestat_get(fd);
 
-            console.log("fd_prestat_get", prestat, ret);
+            // console.log("fd_prestat_get", prestat, ret);
 
             if (prestat) {
               Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, prestat.tag);
@@ -346,7 +346,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
 
             const [ prestat_dir_name, ret ] = this.fd_prestat_dir_name(fd, path_len);
 
-            console.log("fd_prestat_dir_name", new TextDecoder().decode(prestat_dir_name), ret);
+            // console.log("fd_prestat_dir_name", new TextDecoder().decode(prestat_dir_name), ret);
 
             if (prestat_dir_name) {
               await this.allocator.async_write(prestat_dir_name, this.fd_func_sig, fd_func_sig_i32_offset);
@@ -460,13 +460,13 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
             const data = new Uint8Array(this.allocator.get_memory(write_data_ptr, write_data_len));
             this.allocator.free(write_data_ptr, write_data_len);
 
-            console.log("allocator", this.allocator);
+            // console.log("allocator", this.allocator);
 
-            console.log("write_data", data);
+            // console.log("write_data", data);
 
             const [nwritten, error] = this.fd_write(fd, data);
 
-            console.log("fd_write: park: error", error);
+            // console.log("fd_write: park: error", error);
 
             if (nwritten !== undefined) {
               Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, nwritten);
@@ -573,7 +573,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
 
             const [opened_fd, error] = this.path_open(fd, dirflags, path_str, oflags, fs_rights_base, fs_rights_inheriting, fd_flags);
 
-            console.log("path_open: opend_fd", opened_fd, error);
+            // console.log("path_open: opend_fd", opened_fd, error);
 
             if (opened_fd !== undefined) {
               this.notify_push_fd(opened_fd);

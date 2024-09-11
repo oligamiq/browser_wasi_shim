@@ -131,7 +131,7 @@ export class Allocator {
     } else {
       share_arrays_memory_kept = Atomics.load(view, 2);
     }
-    console.log("num", Atomics.load(view, 1));
+    // console.log("num", Atomics.load(view, 1));
 
     const memory_len = memory.byteLength;
     const len = data.byteLength;

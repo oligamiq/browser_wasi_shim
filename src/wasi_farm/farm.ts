@@ -36,7 +36,7 @@ export class WASIFarm {
   private fds_ref(): Array<Fd> {
     const fds = new Proxy([] as Array<Fd>, {
       get: (_, prop) => {
-        console.log("fds", prop);
+        // console.log("fds", prop);
 
         if (prop === "push") {
           return (fd: Fd) => {
