@@ -177,7 +177,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
 
         const func_number = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset);
 
-        // console.log("func_number", func_number);
+        console.log("called: func: ", func_number);
 
         switcher: switch (func_number) {
           // fd_advise: (fd: u32) => errno;
