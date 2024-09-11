@@ -304,8 +304,10 @@ export class WASIFarmAnimal {
           data.set(buffer8.slice(iovec.buf, iovec.buf + iovec.buf_len), nwritten);
           nwritten += iovec.buf_len;
         }
-        const [ret, written] = self.wasi_farm_ref.fd_pwrite(fd, data, offset);
-        buffer.setUint32(nwritten_ptr, written, true);
+        const [written, ret] = self.wasi_farm_ref.fd_pwrite(fd, data, offset);
+        if (written) {
+          buffer.setUint32(nwritten_ptr, written, true);
+        }
         return ret;
       },
       fd_read(fd: number, iovs_ptr: number, iovs_len: number, nread_ptr: number) {
@@ -372,6 +374,8 @@ export class WASIFarmAnimal {
         return ret;
       },
       fd_write(fd: number, iovs_ptr: number, iovs_len: number, nwritten_ptr: number) {
+        console.log("fd_write", fd, iovs_ptr, iovs_len, nwritten_ptr);
+
         const buffer = new DataView(self.inst.exports.memory.buffer);
         const buffer8 = new Uint8Array(self.inst.exports.memory.buffer);
         const iovecs = wasi.Ciovec.read_bytes_array(
@@ -379,14 +383,24 @@ export class WASIFarmAnimal {
           iovs_ptr,
           iovs_len,
         );
+        console.log("iovecs", iovecs);
         const data = new Uint8Array(iovecs.reduce((acc, iovec) => acc + iovec.buf_len, 0));
+        console.log("data", data);
         let nwritten = 0;
         for (const iovec of iovecs) {
           data.set(buffer8.slice(iovec.buf, iovec.buf + iovec.buf_len), nwritten);
           nwritten += iovec.buf_len;
         }
-        const [ret, written] = self.wasi_farm_ref.fd_write(fd, data);
-        buffer.setUint32(nwritten_ptr, written, true);
+
+        console.log("fd_write", fd, new TextDecoder().decode(data));
+
+        const [written, ret] = self.wasi_farm_ref.fd_write(fd, data);
+
+        console.log("fd_write", fd, ret, written);
+
+        if (written) {
+          buffer.setUint32(nwritten_ptr, written, true);
+        }
         return ret;
       },
       path_create_directory(fd: number, path_ptr: number, path_len: number) {

@@ -18,14 +18,14 @@ export abstract class WASIFarmRef {
   abstract fd_pread(fd: number, iovs: Uint32Array, offset: bigint): [[number, Uint8Array] | undefined, number];
   abstract fd_prestat_get(fd: number): [[number, number] | undefined, number];
   abstract fd_prestat_dir_name(fd: number, path_len: number): [Uint8Array | undefined, number];
-  abstract fd_pwrite(fd: number, iovs: Uint8Array, offset: bigint): [number, number];
+  abstract fd_pwrite(fd: number, iovs: Uint8Array, offset: bigint): [number | undefined, number];
   abstract fd_read(fd: number, iovs: Uint32Array): [[number, Uint8Array] | undefined, number];
   abstract fd_readdir(fd: number, limit_buf_len: number, cookie: bigint): [[Uint8Array, number] | undefined, number]
   abstract fd_renumber(fd: number, to: number): number;
   abstract fd_seek(fd: number, offset: bigint, whence: number): [bigint | undefined, number];
   abstract fd_sync(fd: number): number;
   abstract fd_tell(fd: number): [bigint, number];
-  abstract fd_write(fd: number, iovs: Uint8Array): [number, number];
+  abstract fd_write(fd: number, iovs: Uint8Array): [number | undefined, number];
   abstract path_create_directory(fd: number, path: Uint8Array): number;
   abstract path_filestat_get(fd: number, flags: number, path: Uint8Array): [wasi.Filestat | undefined, number];
   abstract path_filestat_set_times(fd: number, flags: number, path: Uint8Array, st_atim: bigint, st_mtim: bigint, fst_flags: number): number
