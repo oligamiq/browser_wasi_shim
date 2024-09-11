@@ -111,7 +111,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     );
   }
 
-  private notify_push_fd(fd: number) {
+  notify_push_fd(fd: number) {
     console.warn("notify_push_fd", fd);
 
     if (this.fds[fd] == undefined) {
@@ -576,7 +576,6 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
             // console.log("path_open: opend_fd", opened_fd, error);
 
             if (opened_fd !== undefined) {
-              this.notify_push_fd(opened_fd);
               Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, opened_fd);
             }
             set_error(error);

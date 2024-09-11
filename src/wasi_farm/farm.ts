@@ -45,6 +45,12 @@ export class WASIFarm {
           };
         }
         return this.fds[prop];
+      },
+
+      set: (_, prop, value) => {
+        // console.log("fds", prop, value);
+        this.fds[prop] = value;
+        return true;
       }
     });
 
