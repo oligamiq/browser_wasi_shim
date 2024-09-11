@@ -2,6 +2,7 @@ import { debug } from "../debug.js";
 import { Options, WASIProcExit } from "../wasi.js";
 import { WASIFarmRef } from "./ref.js";
 import * as wasi from "../wasi_defs.js";
+import { WASIFarmRefUseArrayBuffer } from "./shared_array_buffer/ref.js";
 
 export class WASIFarmAnimal {
   private args: Array<string>;
@@ -51,9 +52,23 @@ export class WASIFarmAnimal {
   ) {
     debug.enable(options.debug);
 
+    if (wasi_farm_ref instanceof WASIFarmRef) {
+      this.wasi_farm_ref = wasi_farm_ref;
+    } else {
+      try {
+        new SharedArrayBuffer(4);
+        this.can_array_buffer = true;
+      } catch (_) {
+        this.can_array_buffer = false;
+      }
+
+      if (this.can_array_buffer) {
+        this.wasi_farm_ref = WASIFarmRefUseArrayBuffer.init_self(wasi_farm_ref as WASIFarmRefUseArrayBuffer);
+      }
+    }
+
     this.args = args;
     this.env = env;
-    this.wasi_farm_ref = wasi_farm_ref;
     const self = this;
     this.wasiImport = {
       args_sizes_get(argc: number, argv_buf_size: number): number {

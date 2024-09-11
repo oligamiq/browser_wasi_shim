@@ -14,8 +14,10 @@ self.onmessage = async function (e) {
     console.log("wasi: ", wasi);
     let wasm = await fetch("./echo_and_rewrite.wasm");
     let buff = await wasm.arrayBuffer();
+    console.log("buff: ", buff);
     let { instance } = await WebAssembly.instantiate(buff, {
       "wasi_snapshot_preview1": wasi.wasiImport,
     });
+    console.log("instance: ", instance);
     wasi.start(instance);
 }

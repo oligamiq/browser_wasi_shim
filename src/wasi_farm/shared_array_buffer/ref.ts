@@ -14,7 +14,11 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     fd_func_sig: SharedArrayBuffer,
   ) {
     super();
-    this.allocator = allocator;
+    if (allocator instanceof Allocator === false) {
+      this.allocator = Allocator.init_self(allocator);
+    } else {
+      this.allocator = allocator;
+    }
     this.lock_fds = lock_fds;
     this.fd_func_sig = fd_func_sig;
   }
@@ -23,17 +27,26 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     return this;
   }
 
+  static init_self(sl: WASIFarmRefUseArrayBuffer): WASIFarmRef {
+    return new WASIFarmRefUseArrayBuffer(
+      sl.allocator,
+      sl.lock_fds,
+      sl.fd_func_sig,
+    );
+  }
+
   private lock_fd(fd: number) {
-    console.log("view_size", this.lock_fds.byteLength);
     console.log("lock_fd", fd);
     const view = new Int32Array(this.lock_fds);
     // eslint-disable-next-line no-constant-condition
     while (true) {
       const now_value = Atomics.load(view, fd * 2);
-      const value = Atomics.wait(view, fd * 2, now_value);
-      if (value === "timed-out") {
-        console.error("lock_fd timed-out");
-        continue;
+      if (now_value !== 0) {
+        const value = Atomics.wait(view, fd * 2, now_value);
+        if (value === "timed-out") {
+          console.error("lock_fd timed-out");
+          continue;
+        }
       }
       const old = Atomics.exchange(view, fd * 2, 1);
       if (old === 0) {
@@ -100,10 +113,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
       console.error("invoke_fd_func already invoked");
       return;
     }
-    const n = Atomics.notify(view, fd * 2 + 1);
-    if (n !== 1) {
-      console.error("invoke_fd_func notify failed. parent process num is not 1");
-    }
+    Atomics.notify(view, fd * 2 + 1);
   }
 
   private wait_fd_func(fd: number) {

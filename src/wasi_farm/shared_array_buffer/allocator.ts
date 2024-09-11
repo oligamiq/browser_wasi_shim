@@ -21,7 +21,7 @@ export class Allocator {
   // });
 
   // 100MB割り当てたとしても、ブラウザの仮想化により、実際には、使うとするまでメモリを使わないはず
-  share_arrays_memory: SharedArrayBuffer = new SharedArrayBuffer(100 * 1024 * 1024);
+  share_arrays_memory: SharedArrayBuffer;
 
   // データを追加するときは、Atomics.waitで、最初の4byteが0になるまで待つ
   // その後、Atomics.compareExchangeで、最初の4byteを1にする
@@ -32,11 +32,20 @@ export class Allocator {
   // データを追加する。足りないときは延ばす。
   // 解放するときは、Atomics.subで1減らすだけ。
 
-  constructor() {
+  constructor(
+    share_arrays_memory: SharedArrayBuffer = new SharedArrayBuffer(100 * 1024 * 1024),
+  ) {
+    this.share_arrays_memory = share_arrays_memory;
     const view = new Int32Array(this.share_arrays_memory);
     Atomics.store(view, 0, 0);
     Atomics.store(view, 1, 0);
     Atomics.store(view, 2, 0);
+  }
+
+  static init_self(
+    sl: Allocator,
+  ): Allocator {
+    return new Allocator(sl.share_arrays_memory);
   }
 
   async async_write(
