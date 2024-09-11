@@ -1,9 +1,9 @@
+import { Options } from "../wasi.js";
 import * as wasi from "../wasi_defs.js";
+import { WASIFarmAnimal } from "./animals.js";
 
 export abstract class WASIFarmRef {
   abstract get_ref(): WASIFarmRef;
-  // please implement this method
-  // abstract init_self(sl: WASIFarmRef): WASIFarmRef;
 
   abstract fd_advise(fd: number): number;
   abstract fd_allocate(fd: number, offset: bigint, len: bigint): number;
