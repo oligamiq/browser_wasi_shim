@@ -1,7 +1,7 @@
 import WASI, { WASIProcExit } from "./wasi.js";
 export { WASI, WASIProcExit };
-import { WASIFarm, WASIFarmRef } from "./wasi_farm/index.js";
-export { WASIFarm, WASIFarmRef };
+import { WASIFarm, WASIFarmRef, WASIFarmAnimal } from "./wasi_farm/index.js";
+export { WASIFarm, WASIFarmRef, WASIFarmAnimal };
 export { Fd, Inode } from "./fd.js";
 export {
   File,

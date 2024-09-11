@@ -3,7 +3,7 @@ import { Options, WASIProcExit } from "../wasi.js";
 import { WASIFarmRef } from "./ref.js";
 import * as wasi from "../wasi_defs.js";
 
-export class WASIFarmAnimals {
+export class WASIFarmAnimal {
   private args: Array<string>;
   private env: Array<string>;
 
@@ -12,6 +12,8 @@ export class WASIFarmAnimals {
   private inst: { exports: { memory: WebAssembly.Memory } };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   wasiImport: { [key: string]: (...args: Array<any>) => unknown };
+
+  private can_array_buffer;
 
   /// Start a WASI command
   start(instance: {

@@ -8,7 +8,7 @@
 </p>
 
 <script type="module">
-  import { WASI, File, OpenFile, ConsoleStdout, PreopenDirectory, WASIFarmShadow } from "../../dist/index.js";
+  import { WASI, File, OpenFile, ConsoleStdout, PreopenDirectory, WASIFarm } from "../../dist/index.js";
 
   (async () => {
     let args = ["echo_and_rewrite", "hello.txt", "world", "new_world"];
@@ -21,14 +21,14 @@
         ["hello.txt", new File(new TextEncoder().encode("Hello, world!\n"))],
       ]),
     ]
-    let wasi_farm = new WASIFarmShadow(
+    let wasi_farm = new WASIFarm(
       fds,
       { debug: true },
     );
     console.log("WASI farm created");
     let wasi_ref = await wasi_farm.get_ref();
     if (window.Worker) {
-      const myWorker = new Worker("./worker.js");
+      const myWorker = new Worker("./worker.js", { type: "module" });
 
       myWorker.postMessage({ wasi_ref });
     } else {

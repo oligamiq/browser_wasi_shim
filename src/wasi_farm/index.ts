@@ -1,3 +1,4 @@
 import { WASIFarm } from "./farm.js";
 import { WASIFarmRef } from "./ref.js";
-export { WASIFarm, WASIFarmRef };
+import { WASIFarmAnimal } from "./animals.js";
+export { WASIFarm, WASIFarmRef, WASIFarmAnimal };

@@ -4,9 +4,9 @@ import { fd_func_sig_size } from "./park.js";
 import * as wasi from "../../wasi_defs.js";
 
 export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
-  private allocator: Allocator;
-  private lock_fds: SharedArrayBuffer;
-  private fd_func_sig: SharedArrayBuffer;
+  allocator: Allocator;
+  lock_fds: SharedArrayBuffer;
+  fd_func_sig: SharedArrayBuffer;
 
   constructor(
     allocator: Allocator,
@@ -24,6 +24,8 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
   }
 
   private lock_fd(fd: number) {
+    console.log("view_size", this.lock_fds.byteLength);
+    console.log("lock_fd", fd);
     const view = new Int32Array(this.lock_fds);
     // eslint-disable-next-line no-constant-condition
     while (true) {
