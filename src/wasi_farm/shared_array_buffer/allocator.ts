@@ -1,5 +1,5 @@
 // @ts-ignore
-import { debug } from "../../debug.js";
+// import { debug } from "../../debug.js";
 import "../polyfill.js";
 
 export class Allocator {
