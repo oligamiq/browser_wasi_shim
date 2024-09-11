@@ -504,7 +504,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
 
   fd_pwrite(
     fd: number,
-    write_data: Uint32Array,
+    write_data: Uint8Array,
     offset: bigint,
   ): [number | undefined, number] {
     this.lock_fd(fd);
@@ -721,7 +721,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
 
   fd_write(
     fd: number,
-    write_data: Uint32Array,
+    write_data: Uint8Array,
   ): [number | undefined, number] {
     this.lock_fd(fd);
 
