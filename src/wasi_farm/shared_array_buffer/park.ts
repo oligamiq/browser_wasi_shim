@@ -108,12 +108,8 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
 
   /// listener
   listen() {
-    let n = 0;
-    for (const fd of this.fds) {
-      if (fd != undefined) {
-        this.listen_fds.push(this.listen_fd(n));
-      }
-      n++;
+    for (let n = 0; n < this.fds.length; n++) {
+      this.listen_fds.push(this.listen_fd(n));
     }
   }
 
@@ -140,8 +136,10 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     while (true) {
       try {
         let lock: "not-equal" | "timed-out" | "ok";
+
         const { value } = Atomics.waitAsync(lock_view, lock_offset + 1, 0);
         if ( value instanceof Promise) {
+          console.log("listen", fd_n, lock_offset + 1);
           lock = await value;
         } else {
           lock = value;
@@ -149,6 +147,8 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
         if (lock === "timed-out") {
           throw new Error("timed-out");
         }
+
+        console.log("called", fd_n, lock_offset + 1);
 
         const set_error = (errno: number) => {
           const old = Atomics.exchange(func_sig_view_i32, fd_func_sig_i32_offset + errno_offset, errno);

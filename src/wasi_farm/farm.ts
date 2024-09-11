@@ -2,7 +2,7 @@ import { debug } from "../debug.js";
 import { Fd } from "../fd.js";
 import { Options } from "../wasi.js";
 import { WASIFarmPark } from "./park.js";
-import { InnerData } from "./shared_array_buffer/inner_data.js";
+import { WASIFarmRef } from "./ref.js";
 import { WASIFarmParkUseArrayBuffer } from "./shared_array_buffer/park.js";
 
 export class WASIFarm {
@@ -50,7 +50,7 @@ export class WASIFarm {
     return fds;
   }
 
-  get_ref(): InnerData {
+  get_ref(): WASIFarmRef {
     return this.park.get_ref();
   }
 }

@@ -115,6 +115,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
       console.error("invoke_fd_func already invoked");
       return;
     }
+    console.log("invoke_fd_func notify", fd * 2 + 1);
     const n = Atomics.notify(view, fd * 2 + 1);
     if (n !== 1) {
       console.error("invoke_fd_func notify failed:", n);
