@@ -3,12 +3,15 @@ import { Fd } from "../fd.js";
 import { Options } from "../wasi.js";
 import { WASIFarmPark } from "./park.js";
 import { WASIFarmRef } from "./ref.js";
+import { WASIFarmParkUseArrayBuffer } from "./shared_array_buffer/park.js";
 
 export default class WASIFarm {
   args: Array<string>;
   env: Array<string>;
   fds: Array<Fd>;
   park: WASIFarmPark;
+
+  can_array_buffer = true;
 
   constructor(
     args: Array<string>,
@@ -21,7 +24,16 @@ export default class WASIFarm {
     this.args = args;
     this.env = env;
     this.fds = fds;
-    this.park = new WASIFarmPark(this.fds_ref());
+
+    try {
+        new SharedArrayBuffer(4);
+    } catch (_) {
+        this.can_array_buffer = false;
+    }
+
+    if (this.can_array_buffer) {
+        this.park = new WASIFarmParkUseArrayBuffer(this.fds_ref());
+    }
 
     this.park.listen();
   }
