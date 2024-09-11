@@ -18,7 +18,7 @@
       ConsoleStdout.lineBuffered(msg => console.log(`[WASI stdout] ${msg}`)),
       ConsoleStdout.lineBuffered(msg => console.warn(`[WASI stderr] ${msg}`)),
       new PreopenDirectory(".", [
-        ["hello.txt", new File(new TextEncoder().encode("Hello, world!\n"))],
+        ["hello.txt", new File(new TextEncoder().encode("Hello, world!"))],
       ]),
     ]
     let wasi_farm = new WASIFarm(
