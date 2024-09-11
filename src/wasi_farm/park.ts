@@ -13,6 +13,34 @@ export abstract class WASIFarmPark {
     this.fds = fds;
   }
 
+  private get_new_fd_lock = new Array<() => Promise<void>>();
+
+  private async get_new_fd(): Promise<[() => void, number]> {
+    const promise = new Promise<[() => void, number]>((resolve) => {
+      const len = this.get_new_fd_lock.push(async () => {
+        let ret = -1;
+        for (let i = 0; i < this.fds.length; i++) {
+          if (this.fds[i] == undefined) {
+            ret = i;
+            break;
+          }
+        }
+        if (ret == -1) {
+          ret = this.fds.length;
+          this.fds.push(undefined);
+        }
+        resolve([() => {
+          this.get_new_fd_lock.shift();
+          this.get_new_fd_lock[0]();
+        }, ret]);
+      });
+      if (len == 1) {
+        this.get_new_fd_lock[0]();
+      }
+    });
+    return promise;
+  }
+
   protected fd_advise(fd: number): number {
     if (this.fds[fd] != undefined) {
       return wasi.ERRNO_SUCCESS;
@@ -31,7 +59,9 @@ export abstract class WASIFarmPark {
 
   protected fd_close(fd: number): number {
     if (this.fds[fd] != undefined) {
-      return this.fds[fd].fd_close();
+      const ret = this.fds[fd].fd_close();
+      this.fds[fd] = undefined;
+      return ret;
     } else {
       return wasi.ERRNO_BADF;
     }
@@ -322,7 +352,7 @@ export abstract class WASIFarmPark {
     }
   }
 
-  protected path_open(
+  protected async path_open(
     fd: number,
     dirflags: number,
     path: string,
@@ -330,7 +360,7 @@ export abstract class WASIFarmPark {
     fs_rights_base: bigint,
     fs_rights_inheriting: bigint,
     fs_flags: number,
-  ): [number | undefined, number] {
+  ): Promise<[number | undefined, number]> {
     if (this.fds[fd] != undefined) {
       debug.log("path_open", path);
       const { ret, fd_obj } = this.fds[fd].path_open(
@@ -345,11 +375,14 @@ export abstract class WASIFarmPark {
       if (ret != wasi.ERRNO_SUCCESS) {
         return [undefined, ret];
       }
-      const len = this.fds.push(fd_obj);
+
+      const [resolve, opened_fd] = await this.get_new_fd();
+
+      this.fds[opened_fd] = fd_obj;
+
+      resolve();
 
       // console.log("path_open: park: len: ", len);
-
-      const opened_fd = len - 1;
 
       // console.log("path_open: park: ", opened_fd);
 

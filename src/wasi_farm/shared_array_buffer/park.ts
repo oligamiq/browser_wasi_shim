@@ -112,7 +112,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
   }
 
   private notify_push_fd(fd: number) {
-    // console.warn("notify_push_fd", fd);
+    console.warn("notify_push_fd", fd);
 
     if (this.fds[fd] == undefined) {
       throw new Error("fd is not defined");
@@ -150,7 +150,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     const lock_offset = fd_n * 2;
     Atomics.store(lock_view, lock_offset, 0);
     Atomics.store(lock_view, lock_offset + 1, 0);
-    Atomics.store(func_sig_view_i32, fd_func_sig_i32_offset + errno_offset, -1);
+    Atomics.store(func_sig_view_i32, errno_offset, -1);
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -571,7 +571,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
             const path_str = new TextDecoder().decode(path);
             this.allocator.free(path_ptr, path_len);
 
-            const [opened_fd, error] = this.path_open(fd, dirflags, path_str, oflags, fs_rights_base, fs_rights_inheriting, fd_flags);
+            const [opened_fd, error] = await this.path_open(fd, dirflags, path_str, oflags, fs_rights_base, fs_rights_inheriting, fd_flags);
 
             // console.log("path_open: opend_fd", opened_fd, error);
 

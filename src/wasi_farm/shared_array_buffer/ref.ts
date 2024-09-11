@@ -65,13 +65,14 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
   }
 
   private release_fd(fd: number) {
-    // console.log("release_fd", fd);
+    console.log("release_fd", fd);
     const view = new Int32Array(this.lock_fds);
     Atomics.store(view, fd * 2, 0);
     Atomics.notify(view, fd * 2, 1);
   }
 
   private lock_double_fd(fd1: number, fd2: number) {
+    console.log("lock_double_fd", fd1, fd2);
     const view = new Int32Array(this.lock_fds);
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -109,6 +110,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
   }
 
   private release_double_fd(fd1: number, fd2: number) {
+    console.log("release_double_fd", fd1, fd2);
     const view = new Int32Array(this.lock_fds);
     Atomics.store(view, fd1 * 2, 0);
     Atomics.notify(view, fd1 * 2, 1);
@@ -1057,6 +1059,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
 
     if (error === wasi.ERRNO_SUCCESS) {
       const new_fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset);
+      this.release_fd(fd);
       return [new_fd, error];
     }
 
