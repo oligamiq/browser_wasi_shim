@@ -340,4 +340,71 @@ export abstract class WASIFarmPark {
       return [undefined, wasi.ERRNO_BADF];
     }
   }
+
+  path_readlink(fd: number, path: string, buf_len: number): [Uint8Array | undefined, number] {
+    if (this.fds[fd] != undefined) {
+      debug.log("path_readlink", path);
+      const { ret, data } = this.fds[fd].path_readlink(path);
+      if (data != null) {
+        const data_buf = new TextEncoder().encode(data);
+        if (data_buf.byteLength > buf_len) {
+          // wasi.ts use ERRNO_BADF. I think it should be ERRNO_OVERFLOW.
+          return [data_buf.slice(0, buf_len), wasi.ERRNO_OVERFLOW];
+        }
+        return [data_buf, ret];
+      }
+      return [undefined, ret];
+    } else {
+      return [undefined, wasi.ERRNO_BADF];
+    }
+  }
+
+  path_remove_directory(fd: number, path: string): number {
+    if (this.fds[fd] != undefined) {
+      return this.fds[fd].path_remove_directory(path);
+    } else {
+      return wasi.ERRNO_BADF;
+    }
+  }
+
+  path_rename(old_fd: number, old_path: string, new_fd: number, new_path: string): number {
+    if (this.fds[old_fd] != undefined && this.fds[new_fd] != undefined) {
+      // eslint-disable-next-line prefer-const
+      let { ret, inode_obj } = this.fds[old_fd].path_unlink(
+        old_path,
+      );
+      if (inode_obj == null) {
+        return ret;
+      }
+      ret = this.fds[new_fd].path_link(new_path, inode_obj, true);
+      if (ret != wasi.ERRNO_SUCCESS) {
+        if (
+          this.fds[old_fd].path_link(old_path, inode_obj, true) !=
+          wasi.ERRNO_SUCCESS
+        ) {
+          throw "path_link should always return success when relinking an inode back to the original place";
+        }
+      }
+      return ret;
+    } else {
+      return wasi.ERRNO_BADF;
+    }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  path_symlink(old_path: string, fd: number, new_path: string): number {
+    if (this.fds[fd] != undefined) {
+      return wasi.ERRNO_NOTSUP;
+    } else {
+      return wasi.ERRNO_BADF;
+    }
+  }
+
+  path_unlink_file(fd: number, path: string): number {
+    if (this.fds[fd] != undefined) {
+      return this.fds[fd].path_unlink_file(path);
+    } else {
+      return wasi.ERRNO_BADF;
+    }
+  }
 }
