@@ -10,8 +10,6 @@ export const fd_func_sig_size: number = 18;
 
 export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
   // This is Proxy
-  fds: Array<Fd>;
-
   allocator: Allocator;
 
   // args, envは変更されないので、コピーで良い
@@ -82,8 +80,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
 
   fd_func_sig: SharedArrayBuffer;
   constructor(fds: Array<Fd>) {
-    super();
-    this.fds = fds;
+    super(fds);
 
     this.allocator = new Allocator();
     const max_fds_len = 128;
@@ -168,13 +165,10 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
           case 7: {
             const fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
 
-            if (this.fds[fd] != undefined) {
-              set_error(wasi.ERRNO_SUCCESS);
-              break switcher;
-            } else {
-              set_error(wasi.ERRNO_BADF);
-              break switcher;
-            }
+            const error = this.fd_advise(fd);
+
+            set_error(error);
+            break switcher;
           }
           // fd_allocate: (fd: u32, offset: u64, len: u64) => errno;
           case 8: {
@@ -182,56 +176,43 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
             const offset = Atomics.load(func_sig_view_u64, fd_func_sig_u64_offset + 1);
             const len = Atomics.load(func_sig_view_u64, fd_func_sig_u64_offset + 2);
 
-            if (this.fds[fd] != undefined) {
-              set_error(this.fds[fd].fd_allocate(offset, len));
-              break switcher;
-            } else {
-              set_error(wasi.ERRNO_BADF);
-              break switcher;
-            }
+            const error = this.fd_allocate(fd, offset, len);
+
+            set_error(error);
+            break switcher;
           }
           // fd_close: (fd: u32) => errno;
           case 9: {
             const fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
 
-            if (this.fds[fd] != undefined) {
-              set_error(this.fds[fd].fd_close());
-              break switcher;
-            } else {
-              set_error(wasi.ERRNO_BADF);
-              break switcher;
-            }
+            const error = this.fd_close(fd);
+
+            set_error(error);
+            break switcher;
           }
           // fd_datasync: (fd: u32) => errno;
           case 10: {
             const fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
 
-            if (this.fds[fd] != undefined) {
-              set_error(this.fds[fd].fd_sync());
-              break switcher;
-            } else {
-              set_error(wasi.ERRNO_BADF);
-              break switcher;
-            }
+            const error = this.fd_datasync(fd);
+
+            set_error(error);
+            break switcher;
           }
           // fd_fdstat_get: (fd: u32) => [wasi.Fdstat(u32 * 6)], errno];
           case 11: {
             const fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
 
-            if (this.fds[fd] != undefined) {
-              const { ret, fdstat } = this.fds[fd].fd_fdstat_get();
-              if (fdstat != null) {
+            const [ fdstat, ret ] = this.fd_fdstat_get(fd);
+
+            if (fdstat != null) {
                 Atomics.store(func_sig_view_u8, fd_func_sig_u8_offset, fdstat.fs_filetype);
                 Atomics.store(func_sig_view_u16, fd_func_sig_u16_offset + 2, fdstat.fs_flags);
                 Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset + 1, fdstat.fs_rights_base);
                 Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset + 2, fdstat.fs_rights_inherited);
-              }
-              set_error(ret);
-              break switcher;
-            } else {
-              set_error(wasi.ERRNO_BADF);
-              break switcher;
             }
+            set_error(ret);
+            break switcher;
           }
           // fd_fdstat_set_flags: (fd: u32, flags: u16) => errno;
           case 12: {
