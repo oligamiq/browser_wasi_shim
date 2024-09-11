@@ -164,20 +164,31 @@ export abstract class WASIFarmPark {
     if (this.fds[fd] != undefined) {
       let nread = 0;
 
+      console.log("fd_read: park: iovecs: ", iovecs);
+
       const sum_len = iovecs.reduce((acc, iovec) => acc + iovec.buf_len, 0);
+
+      console.log("fd_read: park: sum_len: ", sum_len);
+
       const buffer8 = new Uint8Array(sum_len);
       for (const iovec of iovecs) {
         const { ret, data } = this.fds[fd].fd_read(iovec.buf_len);
         if (ret != wasi.ERRNO_SUCCESS) {
-          return [[nread, data], ret];
+          return [[nread, buffer8.slice(0, nread)], ret];
         }
         buffer8.set(data, nread);
-        nread += data.length;
-        if (data.length != iovec.buf_len) {
+        nread += data.byteLength;
+        if (data.byteLength != iovec.buf_len) {
           break;
         }
       }
-      return [[nread, buffer8], wasi.ERRNO_SUCCESS];
+
+      console.log("fd_read: park: nread: ", nread);
+
+      return [[
+        nread,
+        buffer8.slice(0, nread),
+      ], wasi.ERRNO_SUCCESS];
     } else {
       return [undefined, wasi.ERRNO_BADF];
     }

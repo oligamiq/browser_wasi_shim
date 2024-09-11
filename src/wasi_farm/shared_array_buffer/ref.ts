@@ -490,8 +490,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, 17);
     Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset + 1, fd);
     const [ptr, len] = this.allocator.block_write(iovs, this.fd_func_sig, fd_func_sig_u32_offset + 2);
-    Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset + 4, iovs.length);
-    Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset + 3, offset);
+    Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset + 2, offset);
 
     if (!this.call_fd_func(fd)) {
       this.allocator.free(ptr, len);
@@ -636,7 +635,6 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, 21);
     Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset + 1, fd);
     const [ptr, len] = this.allocator.block_write(iovs, this.fd_func_sig, fd_func_sig_u32_offset + 2);
-    Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset + 4, iovs.length);
 
     if (!this.call_fd_func(fd)) {
       this.allocator.free(ptr, len);
@@ -651,12 +649,19 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     const buf_len = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 2);
     this.release_fd(fd);
 
+    console.log("fd_read: ref: ", nread, buf_ptr, buf_len);
+
     if (error === wasi.ERRNO_BADF) {
       this.allocator.free(buf_ptr, buf_len);
       return [undefined, error];
     }
 
+    // fd_read: ref:  14 30 14
+    // animals.ts:325 fd_read: nread 14 Hello, world!
+    // fd_read: ref:  21 52 32
+    // ref.ts:655 fd_read: ref:  21 
     const buf = this.allocator.get_memory(buf_ptr, buf_len);
+    console.log("fd_read: ref: ", nread, new TextDecoder().decode(buf));
 
     if (nread !== buf_len) {
       console.error("read nread !== buf_len");

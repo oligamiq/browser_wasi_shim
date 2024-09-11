@@ -247,7 +247,7 @@ export class WASIFarmAnimal {
       fd_pread(fd: number, iovs_ptr: number, iovs_len: number, offset: bigint, nread_ptr: number) {
         const buffer = new DataView(self.inst.exports.memory.buffer);
         const buffer8 = new Uint8Array(self.inst.exports.memory.buffer);
-        const iovs_view = new Uint32Array(buffer.buffer, iovs_ptr, iovs_len * 8);
+        const iovs_view = new Uint32Array(buffer.buffer, iovs_ptr, iovs_len * 2);
         const [nerad_and_read_data, ret] = self.wasi_farm_ref.fd_pread(fd, iovs_view, offset);
         if (nerad_and_read_data) {
           const iovecs = wasi.Iovec.read_bytes_array(
@@ -313,7 +313,8 @@ export class WASIFarmAnimal {
       fd_read(fd: number, iovs_ptr: number, iovs_len: number, nread_ptr: number) {
         const buffer = new DataView(self.inst.exports.memory.buffer);
         const buffer8 = new Uint8Array(self.inst.exports.memory.buffer);
-        const iovs_view = new Uint32Array(buffer.buffer, iovs_ptr, iovs_len * 8);
+        const iovs_view = new Uint32Array(buffer.buffer, iovs_ptr, iovs_len * 2);
+
         const [nerad_and_read_data, ret] = self.wasi_farm_ref.fd_read(fd, iovs_view);
         if (nerad_and_read_data) {
           const iovecs = wasi.Iovec.read_bytes_array(
@@ -322,6 +323,12 @@ export class WASIFarmAnimal {
             iovs_len,
           );
           const [nread, read_data] = nerad_and_read_data;
+
+          console.log("fd_read: nread", nread, new TextDecoder().decode(read_data));
+
+          // fd_read: ref:  14 30 14
+          // animals.ts:325 fd_read: nread 14 Hello, world!
+
           buffer.setUint32(nread_ptr, nread, true);
           let nreaded = 0;
           for (const iovec of iovecs) {

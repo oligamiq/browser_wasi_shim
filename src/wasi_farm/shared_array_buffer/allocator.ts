@@ -16,8 +16,8 @@ export class Allocator {
   // so the size is fixed from the beginning
 
   // share_arrays_memory: SharedArrayBuffer = new SharedArrayBuffer(12, {
-  //   // 100MB
-  //   maxByteLength: 100 * 1024 * 1024,
+  //   // 10MB
+  //   maxByteLength: 10 * 1024 * 1024,
   // });
 
   // 100MB割り当てたとしても、ブラウザの仮想化により、実際には、使うとするまでメモリを使わないはず
@@ -33,7 +33,7 @@ export class Allocator {
   // 解放するときは、Atomics.subで1減らすだけ。
 
   constructor(
-    share_arrays_memory: SharedArrayBuffer = new SharedArrayBuffer(100 * 1024 * 1024),
+    share_arrays_memory: SharedArrayBuffer = new SharedArrayBuffer(10 * 1024 * 1024),
   ) {
     this.share_arrays_memory = share_arrays_memory;
     const view = new Int32Array(this.share_arrays_memory);

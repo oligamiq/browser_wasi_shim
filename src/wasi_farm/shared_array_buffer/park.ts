@@ -301,16 +301,12 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
             const fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
             const iovs_ptr = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 2);
             const iovs_ptr_len = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 3);
-            const iovs_len = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 4);
-            if (iovs_ptr_len != iovs_len * 8) {
-              throw new Error("iovs_ptr_len is not iovs_len * 8");
-            }
-            const offset = Atomics.load(func_sig_view_u64, fd_func_sig_u64_offset + 3);
-            const data = new Uint32Array(this.allocator.get_memory(iovs_ptr, iovs_len * 8));
-            this.allocator.free(iovs_ptr, iovs_len * 8);
+            const offset = Atomics.load(func_sig_view_u64, fd_func_sig_u64_offset + 2);
+            const data = new Uint32Array(this.allocator.get_memory(iovs_ptr, iovs_ptr_len));
+            this.allocator.free(iovs_ptr, iovs_ptr_len);
 
             const iovecs = new Array<wasi.Iovec>();
-            for (let i = 0; i < iovs_len; i++) {
+            for (let i = 0; i < iovs_ptr_len; i += 8) {
               const iovec = new wasi.Iovec();
               iovec.buf = data[i * 2];
               iovec.buf_len = data[i * 2 + 1];
@@ -319,7 +315,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
 
             const [[nread, buffer8], error] = this.fd_pread(fd, iovecs, offset);
 
-            if (nread) {
+            if (nread !== undefined) {
               Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, nread);
             }
             if (buffer8) {
@@ -370,7 +366,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
 
             const [nwritten, error] = this.fd_pwrite(fd, data, offset);
 
-            if (nwritten) {
+            if (nwritten !== undefined) {
               Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, nwritten);
             }
             set_error(error);
@@ -381,15 +377,11 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
             const fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
             const iovs_ptr = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 2);
             const iovs_ptr_len = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 3);
-            const iovs_len = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 4);
-            if (iovs_ptr_len != iovs_len * 8) {
-              throw new Error("iovs_ptr_len is not iovs_len * 8");
-            }
-            const data = new Uint32Array(this.allocator.get_memory(iovs_ptr, iovs_len * 8));
-            this.allocator.free(iovs_ptr, iovs_len * 8);
+            const data = new Uint32Array(this.allocator.get_memory(iovs_ptr, iovs_ptr_len));
+            this.allocator.free(iovs_ptr, iovs_ptr_len);
 
             const iovecs = new Array<wasi.Iovec>();
-            for (let i = 0; i < iovs_len; i++) {
+            for (let i = 0; i < iovs_ptr_len; i += 8) {
               const iovec = new wasi.Iovec();
               iovec.buf = data[i * 2];
               iovec.buf_len = data[i * 2 + 1];
@@ -398,7 +390,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
 
             const [[nread, buffer8], error] = this.fd_read(fd, iovecs);
 
-            if (nread) {
+            if (nread !== undefined) {
               Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, nread);
             }
             if (buffer8) {
@@ -418,7 +410,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
             if (array) {
               await this.allocator.async_write(array, this.fd_func_sig, fd_func_sig_i32_offset);
             }
-            if (buf_used) {
+            if (buf_used !== undefined) {
               Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset + 2, buf_used);
             }
             set_error(error);
@@ -432,7 +424,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
 
             const [new_offset, error] = this.fd_seek(fd, offset, whence);
 
-            if (new_offset) {
+            if (new_offset !== undefined) {
               Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset, new_offset);
             }
             set_error(error);
@@ -453,7 +445,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
 
             const [offset, error] = this.fd_tell(fd);
 
-            if (offset) {
+            if (offset !== undefined) {
               Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset, offset);
             }
             set_error(error);
@@ -476,7 +468,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
 
             console.log("fd_write: park: error", error);
 
-            if (nwritten) {
+            if (nwritten !== undefined) {
               Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, nwritten);
             }
             set_error(error);
@@ -583,7 +575,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
 
             console.log("path_open: opend_fd", opened_fd, error);
 
-            if (opened_fd) {
+            if (opened_fd !== undefined) {
               this.notify_push_fd(opened_fd);
               Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, opened_fd);
             }
