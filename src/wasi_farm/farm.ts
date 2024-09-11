@@ -5,7 +5,7 @@ import { WASIFarmPark } from "./park.js";
 import { WASIFarmRef } from "./ref.js";
 import { WASIFarmParkUseArrayBuffer } from "./shared_array_buffer/park.js";
 
-export default class WASIFarm {
+export class WASIFarm {
   private fds: Array<Fd>;
   private park: WASIFarmPark;
 
