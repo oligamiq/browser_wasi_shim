@@ -59,7 +59,7 @@ export class WASIFarmPark {
   // path_filestat_get: (fd: u32, flags: u32, path_ptr: pointer, path_len: u32) => [wasi.Filestat(u32 * 16), errno];
   // path_filestat_set_times: (fd: u32, flags: u32, path_ptr: pointer, path_len: u32, atim: u64, mtim: u64, fst_flags: u16) => errno;
   // path_link: (old_fd: u32, old_flags: u32, old_path_ptr: pointer, old_path_len: u32, new_fd: u32, new_path_ptr: pointer, new_path_len: u32) => errno;
-  // path_open: (fd: u32, dirflags: u32, path_ptr: pointer, path_len: u32, oflags: u32, fs_rights_base: u64, fs_rights_inheriting: u64, fs_flags: u16, fdflags: u16) => [u32, errno];
+  // path_open: (fd: u32, dirflags: u32, path_ptr: pointer, path_len: u32, oflags: u32, fs_rights_base: u64, fs_rights_inheriting: u64, fdflags: u16) => [u32, errno];
   // note: fdsにpushするが、既存のfdに影響しないので、競合しない。
   // path_readlink: (fd: u32, path_ptr: pointer, path_len: u32, buf_ptr: pointer, buf_len: u32) => [u32, errno];
   //    use share_arrays_memory;
@@ -82,7 +82,6 @@ export class WASIFarmPark {
   constructor(fds: Array<Fd>) {
     this.fds = fds;
 
-    const fds_len = fds.length;
     this.allocator = new Allocator();
     const max_fds_len = 128;
     this.lock_fds = new SharedArrayBuffer(4 * max_fds_len * 2);
@@ -138,6 +137,7 @@ export class WASIFarmPark {
     Atomics.store(lock_view, lock_offset + 1, 0);
     Atomics.store(func_sig_view_i32, fd_func_sig_i32_offset + errno_offset, -1);
 
+    // eslint-disable-next-line no-constant-condition
     while (true) {
       try {
         let lock: "not-equal" | "timed-out" | "ok";
@@ -497,6 +497,7 @@ export class WASIFarmPark {
               let buf_used = 0;
               let offset = 0;
 
+              // eslint-disable-next-line no-constant-condition
               while (true) {
                 const { ret, dirent } = this.fds[fd].fd_readdir_single(cookie);
                 if (ret != wasi.ERRNO_SUCCESS) {
@@ -727,13 +728,13 @@ export class WASIFarmPark {
             const new_path_len = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 7);
 
             // new_fdは、lockされているだけなので、待つ
-            if (fd_n != old_fd) {
-              const { value } = Atomics.waitAsync(lock_view, old_fd * 2 + 1, 1);
-              if (value instanceof Promise) {
-                await value;
-              }
-              break switcher;
-            }
+            // if (fd_n != old_fd) {
+            //   const { value } = Atomics.waitAsync(lock_view, old_fd * 2 + 1, 1);
+            //   if (value instanceof Promise) {
+            //     await value;
+            //   }
+            //   break switcher;
+            // }
 
             if (this.fds[old_fd] != undefined && this.fds[new_fd] != undefined) {
               const old_path = new Uint8Array(this.allocator.get_memory(old_path_ptr, old_path_len));
@@ -757,7 +758,7 @@ export class WASIFarmPark {
               break switcher;
             }
           }
-          // path_open: (fd: u32, dirflags: u32, path_ptr: pointer, path_len: u32, oflags: u32, fs_rights_base: u64, fs_rights_inheriting: u64, fs_flags: u16, fdflags: u16) => [u32, errno];
+          // path_open: (fd: u32, dirflags: u32, path_ptr: pointer, path_len: u32, oflags: u32, fs_rights_base: u64, fs_rights_inheriting: u64, fdflags: u16) => [u32, errno];
           case 32: {
             const fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
             const dirflags = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 2);
@@ -766,8 +767,7 @@ export class WASIFarmPark {
             const oflags = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 5);
             const fs_rights_base = Atomics.load(func_sig_view_u64, fd_func_sig_u64_offset + 3);
             const fs_rights_inheriting = Atomics.load(func_sig_view_u64, fd_func_sig_u64_offset + 4);
-            const fs_flags = Atomics.load(func_sig_view_u16, fd_func_sig_u16_offset + 20);
-            const fd_flags = Atomics.load(func_sig_view_u16, fd_func_sig_u16_offset + 21);
+            const fd_flags = Atomics.load(func_sig_view_u16, fd_func_sig_u16_offset + 20);
 
             if (this.fds[fd] != undefined) {
               const path = new Uint8Array(this.allocator.get_memory(path_ptr, path_len));
@@ -805,7 +805,7 @@ export class WASIFarmPark {
             const fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
             const path_ptr = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 2);
             const path_len = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 3);
-            const buf_len = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 5);
+            const buf_len = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 4);
 
             if (this.fds[fd] != undefined) {
               const set_nread = (nread: number) => {
@@ -861,13 +861,13 @@ export class WASIFarmPark {
             const new_path_len = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 6);
 
             // new_fdは、lockされているだけなので、待つ
-            if (fd_n != fd) {
-              const { value } = Atomics.waitAsync(lock_view, fd * 2 + 1, 1);
-              if (value instanceof Promise) {
-                await value;
-              }
-              break switcher;
-            }
+            // if (fd_n != fd) {
+            //   const { value } = Atomics.waitAsync(lock_view, fd * 2 + 1, 1);
+            //   if (value instanceof Promise) {
+            //     await value;
+            //   }
+            //   break switcher;
+            // }
 
             if (this.fds[fd] != undefined && this.fds[new_fd] != undefined) {
               const old_path = new Uint8Array(this.allocator.get_memory(old_path_ptr, old_path_len));
@@ -876,6 +876,7 @@ export class WASIFarmPark {
               const new_path = new Uint8Array(this.allocator.get_memory(new_path_ptr, new_path_len));
               const new_path_str = new TextDecoder().decode(new_path);
               this.allocator.free(new_path_ptr, new_path_len);
+              // eslint-disable-next-line prefer-const
               let { ret, inode_obj } = this.fds[fd].path_unlink(old_path_str);
               if (inode_obj == null) {
                 set_error(ret);
@@ -906,9 +907,11 @@ export class WASIFarmPark {
 
             if (this.fds[fd] != undefined) {
               const old_path = new Uint8Array(this.allocator.get_memory(old_path_ptr, old_path_len));
+              // eslint-disable-next-line @typescript-eslint/no-unused-vars
               const old_path_str = new TextDecoder().decode(old_path);
               this.allocator.free(old_path_ptr, old_path_len);
               const new_path = new Uint8Array(this.allocator.get_memory(new_path_ptr, new_path_len));
+              // eslint-disable-next-line @typescript-eslint/no-unused-vars
               const new_path_str = new TextDecoder().decode(new_path);
               this.allocator.free(new_path_ptr, new_path_len);
               set_error(wasi.ERRNO_NOTSUP);

@@ -46,6 +46,7 @@ export class Allocator {
     // I32Arrayのret_ptrを渡す
     ret_ptr: number,
   ): Promise<void> {
+    // eslint-disable-next-line no-constant-condition
     while (true) {
       const view = new Int32Array(this.share_arrays_memory);
       let lock: "not-equal" | "timed-out" | "ok";
@@ -79,6 +80,7 @@ export class Allocator {
     // ptr, len
     ret_ptr: number,
   ) {
+    // eslint-disable-next-line no-constant-condition
     while (true) {
       const view = new Int32Array(this.share_arrays_memory);
       const lock = Atomics.wait(view, 0, 1);
@@ -139,7 +141,9 @@ export class Allocator {
   }
 
   free(
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     pointer: number,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     len: number
   ) {
     Atomics.sub(new Int32Array(this.share_arrays_memory), 1, 1);

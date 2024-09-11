@@ -19,6 +19,7 @@ export class WASIFarmRef {
 
   lock_fd(fd: number) {
     const view = new Int32Array(this.lock_fds);
+    // eslint-disable-next-line no-constant-condition
     while (true) {
       const now_value = Atomics.load(view, fd * 2);
       const value = Atomics.wait(view, fd * 2, now_value);
@@ -41,6 +42,7 @@ export class WASIFarmRef {
 
   lock_double_fd(fd1: number, fd2: number) {
     const view = new Int32Array(this.lock_fds);
+    // eslint-disable-next-line no-constant-condition
     while (true) {
       const now_value1 = Atomics.load(view, fd1 * 2);
       const value = Atomics.wait(view, fd1 * 2, now_value1);
@@ -204,7 +206,6 @@ export class WASIFarmRef {
 
   fd_fdstat_get(
     fd: number,
-    buf: bigint,
   ): [wasi.Fdstat | undefined, number] {
     this.lock_fd(fd);
 
@@ -259,7 +260,7 @@ export class WASIFarmRef {
 
     Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, 12);
     Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset + 1, fd);
-    Atomics.store(func_sig_view_u32, fd_func_sig_u16_offset + 4, flags);
+    Atomics.store(func_sig_view_u16, fd_func_sig_u16_offset + 4, flags);
 
     this.call_fd_func(fd);
 
@@ -298,7 +299,6 @@ export class WASIFarmRef {
 
   fd_filestat_get(
     fd: number,
-    buf: bigint,
   ): [wasi.Filestat | undefined, number] {
     this.lock_fd(fd);
 
@@ -503,7 +503,7 @@ export class WASIFarmRef {
 
   fd_pwrite(
     fd: number,
-    iovs: Uint32Array,
+    write_data: Uint32Array,
     offset: bigint,
   ): [number | undefined, number] {
     this.lock_fd(fd);
@@ -515,7 +515,7 @@ export class WASIFarmRef {
 
     Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, 20);
     Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset + 1, fd);
-    this.allocator.block_write(iovs, this.fd_func_sig, fd_func_sig_u32_offset + 2);
+    this.allocator.block_write(write_data, this.fd_func_sig, fd_func_sig_u32_offset + 2);
     Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset + 2, offset);
 
     this.call_fd_func(fd);
@@ -619,7 +619,6 @@ export class WASIFarmRef {
 
     const func_sig_view_u32 = new Uint32Array(this.fd_func_sig);
     const fd_func_sig_u32_offset = fd * fd_func_sig_size;
-    const to_func_sig_u32_offset = to * fd_func_sig_size;
 
     // fd
     Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, 23);
@@ -717,5 +716,340 @@ export class WASIFarmRef {
     this.release_fd(fd);
 
     return [offset, error];
+  }
+
+  fd_write(
+    fd: number,
+    write_data: Uint32Array,
+  ): [number | undefined, number] {
+    this.lock_fd(fd);
+
+    const func_sig_view_u32 = new Uint32Array(this.fd_func_sig);
+    const fd_func_sig_u32_offset = fd * fd_func_sig_size;
+
+    Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, 27);
+    Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset + 1, fd);
+    this.allocator.block_write(write_data, this.fd_func_sig, fd_func_sig_u32_offset + 2);
+
+    this.call_fd_func(fd);
+
+    const error = this.get_error(fd);
+
+    if (error === wasi.ERRNO_BADF) {
+      this.release_fd(fd);
+      return [undefined, error];
+    }
+
+    const nwritten = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset);
+
+    this.release_fd(fd);
+
+    return [nwritten, error];
+  }
+
+  path_create_directory(
+    fd: number,
+    path: Uint8Array,
+  ): number {
+    this.lock_fd(fd);
+
+    const func_sig_view_u32 = new Uint32Array(this.fd_func_sig);
+    const fd_func_sig_u32_offset = fd * fd_func_sig_size;
+
+    Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, 28);
+    Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset + 1, fd);
+    this.allocator.block_write(path, this.fd_func_sig, fd_func_sig_u32_offset + 2);
+
+    this.call_fd_func(fd);
+
+    const error = this.get_error(fd);
+
+    this.release_fd(fd);
+
+    return error;
+  }
+
+  path_filestat_get(
+    fd: number,
+    flags: number,
+    path: Uint8Array,
+  ): [wasi.Filestat | undefined, number] {
+    this.lock_fd(fd);
+
+    const func_sig_view_u8 = new Uint8Array(this.fd_func_sig);
+    const func_sig_view_u32 = new Uint32Array(this.fd_func_sig);
+    const func_sig_view_u64 = new BigUint64Array(this.fd_func_sig);
+    const fd_func_sig_u8_offset = fd * fd_func_sig_size * 4;
+    const fd_func_sig_u32_offset = fd * fd_func_sig_size;
+    const fd_func_sig_u64_offset = Math.floor(fd_func_sig_u32_offset / 2);
+
+    Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, 29);
+    Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset + 1, fd);
+    Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset + 2, flags);
+    this.allocator.block_write(path, this.fd_func_sig, fd_func_sig_u32_offset + 3);
+
+    this.call_fd_func(fd);
+
+    const error = this.get_error(fd);
+
+    if (error !== wasi.ERRNO_SUCCESS) {
+      this.release_fd(fd);
+      return [undefined, error];
+    }
+
+    const fs_dev = Atomics.load(func_sig_view_u64, fd_func_sig_u64_offset);
+    const fs_ino = Atomics.load(func_sig_view_u64, fd_func_sig_u64_offset + 1);
+    const fs_filetype = Atomics.load(func_sig_view_u8, fd_func_sig_u8_offset + 16);
+    const fs_nlink = Atomics.load(func_sig_view_u64, fd_func_sig_u64_offset + 3);
+    const fs_size = Atomics.load(func_sig_view_u64, fd_func_sig_u64_offset + 4);
+    const fs_atim = Atomics.load(func_sig_view_u64, fd_func_sig_u64_offset + 5);
+    const fs_mtim = Atomics.load(func_sig_view_u64, fd_func_sig_u64_offset + 6);
+    const fs_ctim = Atomics.load(func_sig_view_u64, fd_func_sig_u64_offset + 7);
+
+    this.release_fd(fd);
+
+    const file_stat = new wasi.Filestat(
+        fs_filetype, fs_size
+    );
+    file_stat.dev = fs_dev;
+    file_stat.ino = fs_ino;
+    file_stat.nlink = fs_nlink;
+    file_stat.atim = fs_atim;
+    file_stat.mtim = fs_mtim;
+    file_stat.ctim = fs_ctim;
+
+    return [file_stat, error];
+  }
+
+  path_filestat_set_times(
+    fd: number,
+    flags: number,
+    path: Uint8Array,
+    st_atim: bigint,
+    st_mtim: bigint,
+    fst_flags: number,
+  ): number {
+    this.lock_fd(fd);
+
+    const func_sig_view_u16 = new Uint16Array(this.fd_func_sig);
+    const func_sig_view_u32 = new Uint32Array(this.fd_func_sig);
+    const func_sig_view_u64 = new BigUint64Array(this.fd_func_sig);
+    const fd_func_sig_u16_offset = fd * fd_func_sig_size * 2;
+    const fd_func_sig_u32_offset = fd * fd_func_sig_size;
+    const fd_func_sig_u64_offset = Math.floor(fd_func_sig_u32_offset / 2);
+
+    Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, 30);
+    Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset + 1, fd);
+    Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset + 2, flags);
+    this.allocator.block_write(path, this.fd_func_sig, fd_func_sig_u32_offset + 3);
+    Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset + 3, st_atim);
+    Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset + 4, st_mtim);
+    Atomics.store(func_sig_view_u16, fd_func_sig_u16_offset + 12, fst_flags);
+
+    this.call_fd_func(fd);
+
+    const error = this.get_error(fd);
+
+    this.release_fd(fd);
+
+    return error;
+  }
+
+  path_link(
+    old_fd: number,
+    old_flags: number,
+    old_path: Uint8Array,
+    new_fd: number,
+    new_path: Uint8Array,
+  ): number {
+    this.lock_double_fd(old_fd, new_fd);
+
+    const func_sig_view_u32 = new Uint32Array(this.fd_func_sig);
+    const fd_func_sig_u32_offset = old_fd * fd_func_sig_size;
+
+    Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, 31);
+    Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset + 1, old_fd);
+    Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset + 2, old_flags);
+    this.allocator.block_write(old_path, this.fd_func_sig, fd_func_sig_u32_offset + 3);
+    Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset + 5, new_fd);
+    this.allocator.block_write(new_path, this.fd_func_sig, fd_func_sig_u32_offset + 6);
+
+    this.call_fd_func(old_fd);
+
+    const error = this.get_error(old_fd);
+
+    this.release_double_fd(old_fd, new_fd);
+
+    return error;
+  }
+
+  path_open(
+    fd: number,
+    dirflags: number,
+    path: Uint8Array,
+    oflags: number,
+    fs_rights_base: bigint,
+    fs_rights_inheriting: bigint,
+    fs_flags: number,
+  ): [number | undefined, number] {
+    this.lock_fd(fd);
+
+    const func_sig_view_u16 = new Uint16Array(this.fd_func_sig);
+    const func_sig_view_u32 = new Uint32Array(this.fd_func_sig);
+    const func_sig_view_u64 = new BigUint64Array(this.fd_func_sig);
+    const fd_func_sig_u16_offset = fd * fd_func_sig_size * 2;
+    const fd_func_sig_u32_offset = fd * fd_func_sig_size;
+    const fd_func_sig_u64_offset = Math.floor(fd_func_sig_u32_offset / 2);
+
+    Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, 32);
+    Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset + 1, fd);
+    Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset + 2, dirflags);
+    this.allocator.block_write(path, this.fd_func_sig, fd_func_sig_u32_offset + 3);
+    Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset + 5, oflags);
+    Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset + 3, fs_rights_base);
+    Atomics.store(func_sig_view_u64, fd_func_sig_u64_offset + 4, fs_rights_inheriting);
+    Atomics.store(func_sig_view_u16, fd_func_sig_u16_offset + 20, fs_flags);
+
+    this.call_fd_func(fd);
+
+    const error = this.get_error(fd);
+
+    if (error === wasi.ERRNO_SUCCESS) {
+      const new_fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset);
+      return [new_fd, error];
+    }
+
+    this.release_fd(fd);
+
+    return [undefined, error];
+  }
+
+  path_readlink(
+    fd: number,
+    path: Uint8Array,
+    buf_len: number,
+  ): [Uint8Array | undefined, number] {
+    this.lock_fd(fd);
+
+    const func_sig_view_u32 = new Uint32Array(this.fd_func_sig);
+    const fd_func_sig_u32_offset = fd * fd_func_sig_size;
+
+    Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, 33);
+    Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset + 1, fd);
+    this.allocator.block_write(path, this.fd_func_sig, fd_func_sig_u32_offset + 2);
+    Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset + 4, buf_len);
+
+    this.call_fd_func(fd);
+
+    const error = this.get_error(fd);
+
+    const nread = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset);
+    const ret_path_ptr = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
+    const ret_path_len = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 2);
+
+    this.release_fd(fd);
+    if (error !== wasi.ERRNO_SUCCESS && error !== wasi.ERRNO_NAMETOOLONG) {
+      this.allocator.free(ret_path_ptr, ret_path_len);
+      return [undefined, error];
+    }
+
+    const ret_path = this.allocator.get_memory(ret_path_ptr, ret_path_len);
+    const ret_path_slice = ret_path.slice(0, nread);
+
+    return [ret_path_slice, error];
+  }
+
+  path_remove_directory(
+    fd: number,
+    path: Uint8Array,
+  ): number {
+    this.lock_fd(fd);
+
+    const func_sig_view_u32 = new Uint32Array(this.fd_func_sig);
+    const fd_func_sig_u32_offset = fd * fd_func_sig_size;
+
+    Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, 34);
+    Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset + 1, fd);
+    this.allocator.block_write(path, this.fd_func_sig, fd_func_sig_u32_offset + 2);
+
+    this.call_fd_func(fd);
+
+    const error = this.get_error(fd);
+
+    this.release_fd(fd);
+
+    return error;
+  }
+
+  path_rename(
+    old_fd: number,
+    old_path: Uint8Array,
+    new_fd: number,
+    new_path: Uint8Array,
+  ): number {
+    this.lock_double_fd(old_fd, new_fd);
+
+    const func_sig_view_u32 = new Uint32Array(this.fd_func_sig);
+    const fd_func_sig_u32_offset = old_fd * fd_func_sig_size;
+
+    Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, 35);
+    Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset + 1, old_fd);
+    this.allocator.block_write(old_path, this.fd_func_sig, fd_func_sig_u32_offset + 2);
+    Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset + 4, new_fd);
+    this.allocator.block_write(new_path, this.fd_func_sig, fd_func_sig_u32_offset + 5);
+
+    this.call_fd_func(old_fd);
+
+    const error = this.get_error(old_fd);
+
+    this.release_double_fd(old_fd, new_fd);
+
+    return error;
+  }
+
+  path_symlink(
+    old_path: Uint8Array,
+    fd: number,
+    new_path: Uint8Array,
+  ): number {
+    this.lock_fd(fd);
+
+    const func_sig_view_u32 = new Uint32Array(this.fd_func_sig);
+    const fd_func_sig_u32_offset = fd * fd_func_sig_size;
+
+    Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, 36);
+    this.allocator.block_write(old_path, this.fd_func_sig, fd_func_sig_u32_offset + 1);
+    Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset + 3, fd);
+    this.allocator.block_write(new_path, this.fd_func_sig, fd_func_sig_u32_offset + 4);
+
+    this.call_fd_func(fd);
+
+    const error = this.get_error(fd);
+
+    this.release_fd(fd);
+
+    return error;
+  }
+
+  path_unlink_file(
+    fd: number,
+    path: Uint8Array,
+  ): number {
+    this.lock_fd(fd);
+
+    const func_sig_view_u32 = new Uint32Array(this.fd_func_sig);
+    const fd_func_sig_u32_offset = fd * fd_func_sig_size;
+
+    Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, 37);
+    Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset + 1, fd);
+    this.allocator.block_write(path, this.fd_func_sig, fd_func_sig_u32_offset + 2);
+
+    this.call_fd_func(fd);
+
+    const error = this.get_error(fd);
+
+    this.release_fd(fd);
+
+    return error;
   }
 }
