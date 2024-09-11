@@ -126,7 +126,7 @@ export class Allocator {
     let share_arrays_memory_kept: number;
     if (old_num === 0) {
       // ユーザがいなかったので、リセットする
-      debug.log("reset allocator");
+      // debug.log("reset allocator");
       share_arrays_memory_kept = Atomics.store(view, 2, 12);
     } else {
       share_arrays_memory_kept = Atomics.load(view, 2);

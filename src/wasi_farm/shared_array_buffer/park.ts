@@ -112,7 +112,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
   }
 
   private notify_push_fd(fd: number) {
-    console.warn("notify_push_fd", fd);
+    // console.warn("notify_push_fd", fd);
 
     if (this.fds[fd] == undefined) {
       throw new Error("fd is not defined");
