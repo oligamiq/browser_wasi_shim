@@ -1,6 +1,6 @@
 // @ts-ignore
-import { debug } from "../debug.js";
-import "./polyfill.js";
+import { debug } from "../../debug.js";
+import "../polyfill.js";
 
 export class Allocator {
   // !Sizedを渡す

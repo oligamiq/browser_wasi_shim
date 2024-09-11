@@ -1,5 +1,5 @@
 import { wasi, WASIFarmRef } from "../../index.js";
-import { Allocator } from "../allocator.js";
+import { Allocator } from "./allocator.js";
 import { fd_func_sig_size } from "./park.js";
 
 export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
