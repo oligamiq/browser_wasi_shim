@@ -1,4 +1,4 @@
-import * as wasi from "wasi_defs.js";
+import * as wasi from "../wasi_defs.js";
 
 export abstract class WASIFarmRef {
   abstract get_ref(): WASIFarmRef;

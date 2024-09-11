@@ -1,6 +1,6 @@
-import { Fd } from "fd.js";
-import * as wasi from "wasi_defs.js";
-import { Allocator } from "allocator.js";
+import { Fd } from "../../fd.js";
+import * as wasi from "../../wasi_defs.js";
+import { Allocator } from "./allocator.js";
 import { WASIFarmRef } from "../ref.js";
 import { WASIFarmPark } from "../park.js";
 import { WASIFarmRefUseArrayBuffer } from "./ref.js";
@@ -75,7 +75,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
   // Alignが面倒なので、u32 * 16 + 4にする
   // つまり1個のサイズは68byte
 
-  private listen_fds: Array<Promise<void>>;
+  private listen_fds: Array<Promise<void>> = [];
 
   private fd_func_sig: SharedArrayBuffer;
   constructor(fds: Array<Fd>) {

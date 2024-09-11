@@ -1,4 +1,4 @@
-onmessage = async function (e) {
+self.onmessage = async function (e) {
     console.log("e: ", e);
     const wasi_ref = e.data;
     console.log("wasi_ref: ", wasi_ref);

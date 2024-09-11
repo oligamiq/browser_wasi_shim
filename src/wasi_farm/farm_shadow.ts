@@ -1,7 +1,7 @@
-import { Fd } from "../fd";
-import { WASIFarm, WASIFarmRef } from "../index";
-import { Options } from "../wasi";
-import { make_shadow_worker_blob_url } from "./make_shadow_worker_blob";
+import { Fd } from "../fd.js";
+import { WASIFarm, WASIFarmRef } from "../index.js";
+import { Options } from "../wasi.js";
+import { make_shadow_worker_blob_url } from "./make_shadow_worker_blob.js";
 
 export class WASIFarmShadow {
   private worker: Worker;
@@ -12,8 +12,10 @@ export class WASIFarmShadow {
     fds: Array<Fd>,
     options: Options = {},
   ) {
-    const farm = WASIFarm(fds, options);
+    const farm = new WASIFarm(fds, options);
     const worker = new Worker(make_shadow_worker_blob_url());
+    console.log("worker", worker);
+    console.log("farm", farm);
     worker.postMessage({
       msg: "create",
       data: farm,
