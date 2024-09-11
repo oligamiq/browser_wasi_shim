@@ -4,7 +4,7 @@ import { WASIFarmRefUseArrayBuffer } from "../../dist/wasi_farm/shared_array_buf
 self.onmessage = async function (e) {
     console.log("e: ", e);
     const wasi_ref_shadow = e.data;
-    console.log("wasi_ref: ", wasi_ref_shadow);
+    console.dir("inner_data: ", wasi_ref_shadow);
     try {
         new SharedArrayBuffer(4);
         this.can_array_buffer = true;
