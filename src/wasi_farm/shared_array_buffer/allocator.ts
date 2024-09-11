@@ -118,6 +118,7 @@ export class Allocator {
     ret_ptr: number,
   ) {
     const view = new Int32Array(this.share_arrays_memory);
+    const view8 = new Uint8Array(this.share_arrays_memory);
 
     // lockを取得した
     // メモリを使っているユーザが増えたことを示す
@@ -130,6 +131,7 @@ export class Allocator {
     } else {
       share_arrays_memory_kept = Atomics.load(view, 2);
     }
+    console.log("num", Atomics.load(view, 1));
 
     const memory_len = memory.byteLength;
     const len = data.byteLength;
@@ -140,13 +142,15 @@ export class Allocator {
       // this.share_arrays_memory.grow(new_memory_len);
       throw new Error("size is bigger than memory. \nTODO! fix memory limit. support big size another way.");
     }
-    const share_arrays_memory_view = new Uint8Array(memory);
-    share_arrays_memory_view.set(new Uint8Array(data), share_arrays_memory_kept);
+    const data8 = new Uint8Array(data);
+    view8.set(new Uint8Array(data8), share_arrays_memory_kept);
     Atomics.store(view, 2, new_memory_len);
 
     const memory_view = new Int32Array(memory);
     Atomics.store(memory_view, ret_ptr, share_arrays_memory_kept);
     Atomics.store(memory_view, ret_ptr + 1, len);
+
+    console.log("allocator::", this);
   }
 
   free(

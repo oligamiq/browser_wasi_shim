@@ -454,6 +454,8 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
             const data = new Uint8Array(this.allocator.get_memory(write_data_ptr, write_data_len));
             this.allocator.free(write_data_ptr, write_data_len);
 
+            console.log("allocator", this.allocator);
+
             console.log("write_data", data);
 
             const [nwritten, error] = this.fd_write(fd, data);
