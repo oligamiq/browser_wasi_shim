@@ -75,6 +75,8 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
   // Alignが面倒なので、u32 * 16 + 4にする
   // つまり1個のサイズは68byte
 
+  private fds_len: SharedArrayBuffer;
+
   private listen_fds: Array<Promise<void>> = [];
 
   private fd_func_sig: SharedArrayBuffer;
@@ -85,6 +87,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     const max_fds_len = 128;
     this.lock_fds = new SharedArrayBuffer(4 * max_fds_len * 2);
     this.fd_func_sig = new SharedArrayBuffer(fd_func_sig_size * 4 * max_fds_len);
+    this.fds_len = new SharedArrayBuffer(4);
   }
 
   /// これをpostMessageで送る
@@ -101,13 +104,16 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     // 正常動作
 
     return new WASIFarmRefUseArrayBuffer(
-      structuredClone(this.allocator),
-      structuredClone(this.lock_fds),
-      structuredClone(this.fd_func_sig),
+      this.allocator,
+      this.lock_fds,
+      this.fd_func_sig,
+      this.fds_len,
     );
   }
 
   private notify_push_fd(fd: number) {
+    console.warn("notify_push_fd", fd);
+
     if (this.fds[fd] == undefined) {
       throw new Error("fd is not defined");
     }
@@ -115,6 +121,9 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
       throw new Error("fd is too big. expand is not supported yet");
     }
     this.listen_fds.push(this.listen_fd(fd));
+
+    const view = new Int32Array(this.fds_len);
+    Atomics.add(view, 0, 1);
   }
 
   /// listener
@@ -162,7 +171,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
         console.log("called", fd_n, lock_offset + 1);
 
         const set_error = (errno: number) => {
-          console.log("set_error", errno, "pointer", fd_func_sig_i32_offset + errno_offset);
+          console.log("set_error", errno, "pointer", errno_offset);
           Atomics.store(func_sig_view_i32, errno_offset, errno);
         }
 
@@ -325,6 +334,8 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
 
             const [ prestat, ret ] = this.fd_prestat_get(fd);
 
+            console.log("fd_prestat_get", prestat, ret);
+
             if (prestat) {
               Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, prestat.tag);
               Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset + 1, prestat.inner.pr_name.byteLength);
@@ -338,6 +349,8 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
             const path_len = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
 
             const [ prestat_dir_name, ret ] = this.fd_prestat_dir_name(fd, path_len);
+
+            console.log("fd_prestat_dir_name", new TextDecoder().decode(prestat_dir_name), ret);
 
             if (prestat_dir_name) {
               await this.allocator.async_write(prestat_dir_name, this.fd_func_sig, fd_func_sig_i32_offset);

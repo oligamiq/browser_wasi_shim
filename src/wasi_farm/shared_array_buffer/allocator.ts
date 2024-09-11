@@ -88,7 +88,7 @@ export class Allocator {
     memory: SharedArrayBuffer,
     // ptr, len
     ret_ptr: number,
-  ) {
+  ): [number, number] {
     // eslint-disable-next-line no-constant-condition
     while (true) {
       const view = new Int32Array(this.share_arrays_memory);
@@ -101,13 +101,13 @@ export class Allocator {
         continue;
       }
 
-      this.write_inner(data, memory, ret_ptr);
+      const ret = this.write_inner(data, memory, ret_ptr);
 
       // lockを解放する
       Atomics.store(view, 0, 0);
       Atomics.notify(view, 0, 1);
 
-      break;
+      return ret;
     }
   }
 
@@ -116,7 +116,7 @@ export class Allocator {
     memory: SharedArrayBuffer,
     // ptr, len
     ret_ptr: number,
-  ) {
+  ): [number, number] {
     const view = new Int32Array(this.share_arrays_memory);
     const view8 = new Uint8Array(this.share_arrays_memory);
 
@@ -150,7 +150,9 @@ export class Allocator {
     Atomics.store(memory_view, ret_ptr, share_arrays_memory_kept);
     Atomics.store(memory_view, ret_ptr + 1, len);
 
-    console.log("allocator::", this);
+    // console.log("allocator::", this);
+
+    return [share_arrays_memory_kept, len];
   }
 
   free(
