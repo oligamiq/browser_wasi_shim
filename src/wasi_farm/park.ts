@@ -7,7 +7,7 @@ export abstract class WASIFarmPark {
   abstract get_ref(): WASIFarmRef;
   abstract listen(): void;
 
-  private fds: Array<Fd>;
+  protected fds: Array<Fd>;
 
   constructor(fds: Array<Fd>) {
     this.fds = fds;
