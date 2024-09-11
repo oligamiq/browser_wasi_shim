@@ -3,9 +3,9 @@ import { Allocator } from "./allocator.js";
 import { fd_func_sig_size } from "./park.js";
 
 export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
-  allocator: Allocator;
-  lock_fds: SharedArrayBuffer;
-  fd_func_sig: SharedArrayBuffer;
+  private allocator: Allocator;
+  private lock_fds: SharedArrayBuffer;
+  private fd_func_sig: SharedArrayBuffer;
 
   constructor(
     allocator: Allocator,
@@ -22,7 +22,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     return this;
   }
 
-  lock_fd(fd: number) {
+  private lock_fd(fd: number) {
     const view = new Int32Array(this.lock_fds);
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -39,13 +39,13 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     }
   }
 
-  release_fd(fd: number) {
+  private release_fd(fd: number) {
     const view = new Int32Array(this.lock_fds);
     Atomics.store(view, fd * 2, 0);
     Atomics.notify(view, fd * 2, 1);
   }
 
-  lock_double_fd(fd1: number, fd2: number) {
+  private lock_double_fd(fd1: number, fd2: number) {
     const view = new Int32Array(this.lock_fds);
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -82,7 +82,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     }
   }
 
-  release_double_fd(fd1: number, fd2: number) {
+  private release_double_fd(fd1: number, fd2: number) {
     const view = new Int32Array(this.lock_fds);
     Atomics.store(view, fd1 * 2, 0);
     Atomics.notify(view, fd1 * 2, 1);
@@ -90,7 +90,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     Atomics.notify(view, fd2 * 2, 1);
   }
 
-  invoke_fd_func(fd: number) {
+  private invoke_fd_func(fd: number) {
     const view = new Int32Array(this.fd_func_sig);
     const old = Atomics.exchange(view, fd * 2 + 1, 1);
     if (old === 1) {
@@ -103,7 +103,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     }
   }
 
-  wait_fd_func(fd: number) {
+  private wait_fd_func(fd: number) {
     const view = new Int32Array(this.fd_func_sig);
     const value = Atomics.wait(view, fd * 2 + 1, 1);
     if (value === "timed-out") {
@@ -111,12 +111,12 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     }
   }
 
-  call_fd_func(fd: number) {
+  private call_fd_func(fd: number) {
     this.invoke_fd_func(fd);
     this.wait_fd_func(fd);
   }
 
-  get_error(fd: number): number {
+  private get_error(fd: number): number {
     const func_sig_view_i32 = new Int32Array(this.fd_func_sig);
     const fd_func_sig_i32_offset = fd * fd_func_sig_size;
     const errno_offset = fd_func_sig_i32_offset + (fd_func_sig_size - 1);

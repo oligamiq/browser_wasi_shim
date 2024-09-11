@@ -11,7 +11,7 @@ export class WASIFarmAnimals {
 
   private inst: { exports: { memory: WebAssembly.Memory } };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private wasiImport: { [key: string]: (...args: Array<any>) => unknown };
+  wasiImport: { [key: string]: (...args: Array<any>) => unknown };
 
   /// Start a WASI command
   start(instance: {
