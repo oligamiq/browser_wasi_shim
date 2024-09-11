@@ -40,7 +40,8 @@ export class WASIFarm {
 
         if (prop === "push") {
           return (fd: Fd) => {
-            this.fds.push(fd);
+            const len = this.fds.push(fd);
+            return len;
           };
         }
         return this.fds[prop];

@@ -128,7 +128,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     if (n !== 1) {
       if (n === 0) {
         const len_view = new Int32Array(this.fds_len);
-        const len = Atomics.load(len_view, fd);
+        const len = Atomics.load(len_view, 0);
         if (len <= fd) {
           return false;
         }

@@ -330,11 +330,18 @@ export abstract class WASIFarmPark {
         fs_rights_inheriting,
         fs_flags,
       );
+      console.log("path_open: park: ", ret, fd_obj);
       if (ret != wasi.ERRNO_SUCCESS) {
         return [undefined, ret];
       }
       const len = this.fds.push(fd_obj);
+
+      console.log("path_open: park: len: ", len);
+
       const opened_fd = len - 1;
+
+      console.log("path_open: park: ", opened_fd);
+
       return [opened_fd, wasi.ERRNO_SUCCESS];
     } else {
       return [undefined, wasi.ERRNO_BADF];

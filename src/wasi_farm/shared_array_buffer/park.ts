@@ -581,6 +581,8 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
 
             const [opened_fd, error] = this.path_open(fd, dirflags, path_str, oflags, fs_rights_base, fs_rights_inheriting, fd_flags);
 
+            console.log("path_open: opend_fd", opened_fd, error);
+
             if (opened_fd) {
               this.notify_push_fd(opened_fd);
               Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, opened_fd);
