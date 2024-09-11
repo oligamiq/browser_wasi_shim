@@ -56,6 +56,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
   }
 
   private release_fd(fd: number) {
+    console.log("release_fd", fd);
     const view = new Int32Array(this.lock_fds);
     Atomics.store(view, fd * 2, 0);
     Atomics.notify(view, fd * 2, 1);
@@ -107,16 +108,21 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
   }
 
   private invoke_fd_func(fd: number) {
+    console.log("invoke_fd_func", fd);
     const view = new Int32Array(this.fd_func_sig);
     const old = Atomics.exchange(view, fd * 2 + 1, 1);
     if (old === 1) {
       console.error("invoke_fd_func already invoked");
       return;
     }
-    Atomics.notify(view, fd * 2 + 1);
+    const n = Atomics.notify(view, fd * 2 + 1);
+    if (n !== 1) {
+      console.error("invoke_fd_func notify failed:", n);
+    }
   }
 
   private wait_fd_func(fd: number) {
+    console.log("wait_fd_func", fd);
     const view = new Int32Array(this.fd_func_sig);
     const value = Atomics.wait(view, fd * 2 + 1, 1);
     if (value === "timed-out") {
