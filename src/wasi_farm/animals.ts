@@ -4,14 +4,14 @@ import { WASIFarmRef } from "./ref.js";
 import * as wasi from "../wasi_defs.js";
 
 export class WASIFarmAnimals {
-  args: Array<string>;
-  env: Array<string>;
+  private args: Array<string>;
+  private env: Array<string>;
 
-  wasi_farm_ref: WASIFarmRef;
+  private wasi_farm_ref: WASIFarmRef;
 
-  inst: { exports: { memory: WebAssembly.Memory } };
+  private inst: { exports: { memory: WebAssembly.Memory } };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  wasiImport: { [key: string]: (...args: Array<any>) => unknown };
+  private wasiImport: { [key: string]: (...args: Array<any>) => unknown };
 
   /// Start a WASI command
   start(instance: {

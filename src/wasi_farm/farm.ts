@@ -6,12 +6,12 @@ import { WASIFarmRef } from "./ref.js";
 import { WASIFarmParkUseArrayBuffer } from "./shared_array_buffer/park.js";
 
 export default class WASIFarm {
-  args: Array<string>;
-  env: Array<string>;
-  fds: Array<Fd>;
-  park: WASIFarmPark;
+  private args: Array<string>;
+  private env: Array<string>;
+  private fds: Array<Fd>;
+  private park: WASIFarmPark;
 
-  can_array_buffer;
+  private can_array_buffer;
 
   constructor(
     args: Array<string>,
