@@ -89,10 +89,21 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
 
   /// これをpostMessageで送る
   get_ref(): WASIFarmRef {
+    console.log("listen_fds", this.listen_fds);
+
+    // const view = new Int32Array(this.lock_fds);
+    // for (let n = 0; n < this.fds.length; n++) {
+    //   Atomics.store(view, n * 2 + 1, 1);
+    //   Atomics.notify(view, n * 2 + 1);
+    // }
+
+    // console.log("listen_fds", this.listen_fds);
+    // 正常動作
+
     return new WASIFarmRefUseArrayBuffer(
-      this.allocator,
-      this.lock_fds,
-      this.fd_func_sig,
+      structuredClone(this.allocator),
+      structuredClone(this.lock_fds),
+      structuredClone(this.fd_func_sig),
     );
   }
 
@@ -151,14 +162,13 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
         console.log("called", fd_n, lock_offset + 1);
 
         const set_error = (errno: number) => {
-          const old = Atomics.exchange(func_sig_view_i32, fd_func_sig_i32_offset + errno_offset, errno);
-          if (old !== -1) {
-            throw new Error("Error is already set");
-          }
-          Atomics.notify(func_sig_view_i32, fd_func_sig_i32_offset + errno_offset);
+          Atomics.store(func_sig_view_i32, fd_func_sig_i32_offset + errno_offset, errno);
         }
 
         const func_number = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset);
+
+        console.log("func_number", func_number);
+
         switcher: switch (func_number) {
           // fd_advise: (fd: u32) => errno;
           case 7: {
@@ -444,6 +454,8 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
             const data = new Uint8Array(this.allocator.get_memory(write_data_ptr, write_data_len));
             this.allocator.free(write_data_ptr, write_data_len);
 
+            console.log("write_data", data);
+
             const [nwritten, error] = this.fd_write(fd, data);
 
             if (nwritten) {
@@ -651,7 +663,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
         }
 
         const old_call_lock = Atomics.exchange(lock_view, lock_offset + 1, 0);
-        if (old_call_lock !== 0) {
+        if (old_call_lock !== 1) {
           throw new Error("Call is already set");
         }
         const n = Atomics.notify(lock_view, lock_offset + 1);

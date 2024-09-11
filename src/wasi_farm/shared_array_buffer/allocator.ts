@@ -39,7 +39,7 @@ export class Allocator {
     const view = new Int32Array(this.share_arrays_memory);
     Atomics.store(view, 0, 0);
     Atomics.store(view, 1, 0);
-    Atomics.store(view, 2, 0);
+    Atomics.store(view, 2, 12);
   }
 
   static init_self(
@@ -126,7 +126,7 @@ export class Allocator {
     if (old_num === 0) {
       // ユーザがいなかったので、リセットする
       debug.log("reset allocator");
-      share_arrays_memory_kept = Atomics.store(view, 2, 0);
+      share_arrays_memory_kept = Atomics.store(view, 2, 12);
     } else {
       share_arrays_memory_kept = Atomics.load(view, 2);
     }

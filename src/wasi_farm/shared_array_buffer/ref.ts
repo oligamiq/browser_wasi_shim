@@ -109,7 +109,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
 
   private invoke_fd_func(fd: number) {
     console.log("invoke_fd_func", fd);
-    const view = new Int32Array(this.fd_func_sig);
+    const view = new Int32Array(this.lock_fds);
     const old = Atomics.exchange(view, fd * 2 + 1, 1);
     if (old === 1) {
       console.error("invoke_fd_func already invoked");
@@ -124,7 +124,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
 
   private wait_fd_func(fd: number) {
     console.log("wait_fd_func", fd);
-    const view = new Int32Array(this.fd_func_sig);
+    const view = new Int32Array(this.lock_fds);
     const value = Atomics.wait(view, fd * 2 + 1, 1);
     if (value === "timed-out") {
       console.error("wait call park_fd_func timed-out");
