@@ -5,7 +5,7 @@ self.onmessage = async function (e) {
 
     const wasi = new WASIFarmAnimal(
         wasi_ref,
-        ["echo_and_rewrite", "hello.txt", "world", "new_world"], // args
+        ["echo_and_rewrite", "hello.txt", "world", "new_world", "100", "200"], // args
         [""], // env
         // options
     );
