@@ -146,17 +146,18 @@ export abstract class WASIFarmPark {
     if (this.fds[fd] != undefined) {
       let nread = 0;
 
-      const sum_len = iovecs.reduce((acc, iovec) => acc + iovec.buf_len, 0);
-      const buffer8 = new Uint8Array(sum_len);
+      let buffer8 = new Uint8Array(0);
       for (const iovec of iovecs) {
         const { ret, data } = this.fds[fd].fd_pread(iovec.buf_len, offset);
         if (ret != wasi.ERRNO_SUCCESS) {
-          return [[nread, data], ret];
+          return [[nread, buffer8], ret];
         }
-        buffer8.set(data, nread);
-        nread += data.length;
-        offset += BigInt(data.length);
-        if (data.length != iovec.buf_len) {
+        const new_buffer = new Uint8Array(buffer8.byteLength + data.byteLength);
+        new_buffer.set(buffer8);
+        new_buffer.set(data, buffer8.byteLength);
+        buffer8 = new_buffer;
+        nread += data.byteLength;
+        if (data.byteLength != iovec.buf_len) {
           break;
         }
       }
@@ -207,19 +208,22 @@ export abstract class WASIFarmPark {
     if (this.fds[fd] != undefined) {
       let nread = 0;
 
-      // console.log("fd_read: park: iovecs: ", iovecs);
+      console.log("fd_read: park: iovecs: ", iovecs);
 
-      const sum_len = iovecs.reduce((acc, iovec) => acc + iovec.buf_len, 0);
+      // const sum_len = iovecs.reduce((acc, iovec) => acc + iovec.buf_len, 0);
 
-      // console.log("fd_read: park: sum_len: ", sum_len);
+      // console.warn("fd_read: park: sum_len: ", sum_len);
 
-      const buffer8 = new Uint8Array(sum_len);
+      let buffer8 = new Uint8Array(0);
       for (const iovec of iovecs) {
         const { ret, data } = this.fds[fd].fd_read(iovec.buf_len);
         if (ret != wasi.ERRNO_SUCCESS) {
-          return [[nread, buffer8.slice(0, nread)], ret];
+          return [[nread, buffer8], ret];
         }
-        buffer8.set(data, nread);
+        const new_buffer = new Uint8Array(buffer8.byteLength + data.byteLength);
+        new_buffer.set(buffer8);
+        new_buffer.set(data, buffer8.byteLength);
+        buffer8 = new_buffer;
         nread += data.byteLength;
         if (data.byteLength != iovec.buf_len) {
           break;
@@ -230,7 +234,7 @@ export abstract class WASIFarmPark {
 
       return [[
         nread,
-        buffer8.slice(0, nread),
+        buffer8,
       ], wasi.ERRNO_SUCCESS];
     } else {
       return [undefined, wasi.ERRNO_BADF];

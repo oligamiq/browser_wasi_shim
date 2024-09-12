@@ -378,12 +378,12 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
             const fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
             const iovs_ptr = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 2);
             const iovs_ptr_len = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 3);
-            console.log("fd_read: park: iovs: Uint8Array", this.allocator.get_memory(iovs_ptr, iovs_ptr_len));
-            console.log("ptr_len", iovs_ptr_len);
+            // console.log("fd_read: park: iovs: Uint8Array", this.allocator.get_memory(iovs_ptr, iovs_ptr_len));
+            // console.log("ptr_len", iovs_ptr_len);
             const iovs = new Uint32Array(this.allocator.get_memory(iovs_ptr, iovs_ptr_len));
             this.allocator.free(iovs_ptr, iovs_ptr_len);
 
-            console.log("fd_read: park: iovs", iovs);
+            // console.log("fd_read: park: iovs", iovs);
 
             const iovecs = new Array<wasi.Iovec>();
             for (let i = 0; i < iovs_ptr_len; i += 8) {
@@ -393,11 +393,11 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
               iovecs.push(iovec);
             }
 
-            console.log("fd_read: park: iovecs", iovecs);
+            // console.log("fd_read: park: iovecs", iovecs);
 
             const [[nread, buffer8], error] = this.fd_read(fd, iovecs);
 
-            console.log("fd_read: park: buffer8", new TextDecoder().decode(buffer8));
+            // console.log("fd_read: park: buffer8", new TextDecoder().decode(buffer8));
 
             if (nread !== undefined) {
               Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, nread);

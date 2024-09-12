@@ -644,9 +644,13 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
 
     Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, 21);
     Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset + 1, fd);
+
+    // console.log("iovs", iovs);
+    // console.log("iovs.buffer", iovs.buffer.slice(0, iovs.byteLength));
+
     const [ptr, len] = this.allocator.block_write(iovs, this.fd_func_sig, fd_func_sig_u32_offset + 2);
 
-    console.log("fd_read: ref: iovs", iovs);
+    // console.log("fd_read: ref: iovs", iovs);
 
     if (!this.call_fd_func(fd)) {
       this.allocator.free(ptr, len);

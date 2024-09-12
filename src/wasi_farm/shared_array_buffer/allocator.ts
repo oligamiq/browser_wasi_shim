@@ -49,7 +49,7 @@ export class Allocator {
   }
 
   async async_write(
-    data: ArrayBuffer,
+    data: Uint8Array | Uint32Array,
     memory: SharedArrayBuffer,
     // ptr, len
     // I32Arrayのret_ptrを渡す
@@ -84,7 +84,7 @@ export class Allocator {
   }
 
   block_write(
-    data: ArrayBuffer,
+    data: Uint8Array | Uint32Array,
     memory: SharedArrayBuffer,
     // ptr, len
     ret_ptr: number,
@@ -112,11 +112,13 @@ export class Allocator {
   }
 
   write_inner(
-    data: ArrayBuffer,
+    data: Uint8Array | Uint32Array,
     memory: SharedArrayBuffer,
     // ptr, len
     ret_ptr: number,
   ): [number, number] {
+    // console.log("data", data);
+
     const view = new Int32Array(this.share_arrays_memory);
     const view8 = new Uint8Array(this.share_arrays_memory);
 
@@ -142,7 +144,16 @@ export class Allocator {
       // this.share_arrays_memory.grow(new_memory_len);
       throw new Error("size is bigger than memory. \nTODO! fix memory limit. support big size another way.");
     }
-    const data8 = new Uint8Array(data);
+
+    let data8: Uint8Array;
+    if (data instanceof Uint8Array) {
+      data8 = data;
+    } else if (data instanceof Uint32Array) {
+      const tmp = new ArrayBuffer(data.byteLength);
+      new Uint32Array(tmp).set(data);
+      data8 = new Uint8Array(tmp);
+    }
+
     view8.set(new Uint8Array(data8), share_arrays_memory_kept);
     Atomics.store(view, 2, new_memory_len);
 
