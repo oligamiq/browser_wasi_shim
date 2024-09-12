@@ -86,24 +86,13 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
 
     this.allocator = new Allocator();
     const max_fds_len = 128;
-    this.lock_fds = new SharedArrayBuffer(4 * max_fds_len * 2);
+    this.lock_fds = new SharedArrayBuffer(4 * max_fds_len * 3);
     this.fd_func_sig = new SharedArrayBuffer(fd_func_sig_size * 4 * max_fds_len);
     this.fds_len = new SharedArrayBuffer(4);
   }
 
   /// これをpostMessageで送る
   get_ref(): WASIFarmRef {
-    // console.log("listen_fds", this.listen_fds);
-
-    // const view = new Int32Array(this.lock_fds);
-    // for (let n = 0; n < this.fds.length; n++) {
-    //   Atomics.store(view, n * 2 + 1, 1);
-    //   Atomics.notify(view, n * 2 + 1);
-    // }
-
-    // console.log("listen_fds", this.listen_fds);
-    // 正常動作
-
     return new WASIFarmRefUseArrayBuffer(
       this.allocator,
       this.lock_fds,
@@ -148,7 +137,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     const fd_func_sig_u32_offset = fd_n * fd_func_sig_size;
     const fd_func_sig_u64_offset = fd_n * Math.round(fd_func_sig_size / 2)
     const errno_offset = fd_func_sig_i32_offset + (fd_func_sig_size - 1);
-    const lock_offset = fd_n * 2;
+    const lock_offset = fd_n * 3;
     Atomics.store(lock_view, lock_offset, 0);
     Atomics.store(lock_view, lock_offset + 1, 0);
     Atomics.store(func_sig_view_i32, errno_offset, -1);
@@ -698,7 +687,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
         console.error(e);
 
         const lock_view = new Int32Array(this.lock_fds);
-        Atomics.exchange(lock_view, fd_n * 2 + 1, 0);
+        Atomics.exchange(lock_view, lock_offset + 1, 0);
         const func_sig_view = new Int32Array(this.fd_func_sig);
         Atomics.exchange(func_sig_view, fd_func_sig_i32_offset + 16, -1);
       }
