@@ -512,7 +512,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
       return [undefined, error];
     }
 
-    const buf = this.allocator.get_memory(buf_ptr, buf_len);
+    const buf = new Uint8Array(this.allocator.get_memory(buf_ptr, buf_len));
 
     if (nread !== buf_len) {
       console.error("pread nread !== buf_len");
@@ -583,7 +583,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
       return [undefined, error];
     }
 
-    const ret_path = this.allocator.get_memory(ret_path_ptr, ret_path_len);
+    const ret_path = new Uint8Array(this.allocator.get_memory(ret_path_ptr, ret_path_len));
     this.allocator.free(ret_path_ptr, ret_path_len);
 
     return [ret_path, error];
@@ -665,7 +665,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     // animals.ts:325 fd_read: nread 14 Hello, world!
     // fd_read: ref:  21 52 32
     // ref.ts:655 fd_read: ref:  21
-    const buf = this.allocator.get_memory(buf_ptr, buf_len);
+    const buf = new Uint8Array(this.allocator.get_memory(buf_ptr, buf_len));
     // console.log("fd_read: ref: ", nread, new TextDecoder().decode(buf));
 
     if (nread !== buf_len) {
@@ -711,7 +711,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
       return [undefined, error];
     }
 
-    const buf = this.allocator.get_memory(buf_ptr, buf_len);
+    const buf = new Uint8Array(this.allocator.get_memory(buf_ptr, buf_len));
 
     this.allocator.free(buf_ptr, buf_len);
 
@@ -1106,7 +1106,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
       return [undefined, error];
     }
 
-    const ret_path = this.allocator.get_memory(ret_path_ptr, ret_path_len);
+    const ret_path = new Uint8Array(this.allocator.get_memory(ret_path_ptr, ret_path_len));
     const ret_path_slice = ret_path.slice(0, nread);
 
     return [ret_path_slice, error];

@@ -49,7 +49,7 @@ export class Allocator {
   }
 
   async async_write(
-    data: ArrayBufferLike,
+    data: ArrayBuffer,
     memory: SharedArrayBuffer,
     // ptr, len
     // I32Arrayのret_ptrを渡す
@@ -84,7 +84,7 @@ export class Allocator {
   }
 
   block_write(
-    data: ArrayBufferLike,
+    data: ArrayBuffer,
     memory: SharedArrayBuffer,
     // ptr, len
     ret_ptr: number,
@@ -112,7 +112,7 @@ export class Allocator {
   }
 
   write_inner(
-    data: ArrayBufferLike,
+    data: ArrayBuffer,
     memory: SharedArrayBuffer,
     // ptr, len
     ret_ptr: number,
@@ -169,9 +169,11 @@ export class Allocator {
   get_memory(
     ptr: number,
     len: number,
-  ): Uint8Array {
-    const memory = new Uint8Array(this.share_arrays_memory);
-    return memory.slice(ptr, ptr + len);
+  ): ArrayBuffer {
+    const data = new ArrayBuffer(len);
+    const view = new Uint8Array(data);
+    view.set(new Uint8Array(this.share_arrays_memory).slice(ptr, ptr + len));
+    return data;
   }
 
   use_defined_memory(
