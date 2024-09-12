@@ -29,8 +29,8 @@ export abstract class WASIFarmPark {
         let is_notify = false;
         if (ret == -1) {
           ret = this.fds.length;
-          console.log("push_fd", this.fds.length)
-          this.fds.push(undefined);
+          // console.log("push_fd", this.fds.length)
+          // this.fds.push(undefined);
           console.log("push_fd", this.fds.length)
           is_notify = true;
         }
@@ -41,8 +41,8 @@ export abstract class WASIFarmPark {
             fn();
           }
           if (is_notify) {
-            console.log("notify_push_fd", this.fds.length)
-            console.log("notify_push_fd", this.fds[ret])
+            // console.log("notify_push_fd", this.fds.length)
+            // console.log("notify_push_fd", this.fds[ret])
             this.notify_push_fd(ret);
           }
         }, ret]);
@@ -208,7 +208,7 @@ export abstract class WASIFarmPark {
     if (this.fds[fd] != undefined) {
       let nread = 0;
 
-      console.log("fd_read: park: iovecs: ", iovecs);
+      // console.log("fd_read: park: iovecs: ", iovecs);
 
       // const sum_len = iovecs.reduce((acc, iovec) => acc + iovec.buf_len, 0);
 
@@ -217,6 +217,7 @@ export abstract class WASIFarmPark {
       let buffer8 = new Uint8Array(0);
       for (const iovec of iovecs) {
         const { ret, data } = this.fds[fd].fd_read(iovec.buf_len);
+        // console.log("fd_read: park: data: ", data);
         if (ret != wasi.ERRNO_SUCCESS) {
           return [[nread, buffer8], ret];
         }
