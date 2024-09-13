@@ -11,13 +11,35 @@ export class WASIFarm {
 
   private can_array_buffer;
 
+  private stdin?: number;
+  private stdout?: number;
+  private stderr?: number;
+
   constructor(
-    fds: Array<Fd>,
+    stdin?: Fd,
+    stdout?: Fd,
+    stderr?: Fd,
+    fds: Array<Fd> = [],
     options: Options = {},
   ) {
     debug.enable(options.debug);
 
-    this.fds = fds;
+    const new_fds = [];
+    if (stdin) {
+      new_fds.push(stdin);
+      this.stdin = new_fds.length - 1;
+    }
+    if (stdout) {
+      new_fds.push(stdout);
+      this.stdout = new_fds.length - 1;
+    }
+    if (stderr) {
+      new_fds.push(stderr);
+      this.stderr = new_fds.length - 1;
+    }
+    new_fds.push(...fds);
+
+    this.fds = new_fds;
 
     try {
         new SharedArrayBuffer(4);
@@ -27,7 +49,9 @@ export class WASIFarm {
     }
 
     if (this.can_array_buffer) {
-        this.park = new WASIFarmParkUseArrayBuffer(this.fds_ref());
+      this.park = new WASIFarmParkUseArrayBuffer(
+        this.fds_ref()
+      );
     }
 
     this.park.listen();
@@ -58,6 +82,10 @@ export class WASIFarm {
   }
 
   get_ref(): WASIFarmRef {
-    return this.park.get_ref();
+    return this.park.get_ref(
+      this.stdin,
+      this.stdout,
+      this.stderr,
+    );
   }
 }

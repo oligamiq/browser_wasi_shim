@@ -83,14 +83,9 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
   private fd_func_sig: SharedArrayBuffer;
 
   constructor(
-    stdin?: Fd,
-    stdout?: Fd,
-    stderr?: Fd,
     fds: Array<Fd> = []
   ) {
-    const new_fds = [stdin, stdout, stderr, ...fds];
-
-    super(new_fds);
+    super(fds);
 
     this.allocator = new Allocator();
     const max_fds_len = 128;
@@ -100,12 +95,19 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
   }
 
   /// これをpostMessageで送る
-  get_ref(): WASIFarmRef {
+  get_ref(
+    stdin?: number,
+    stdout?: number,
+    stderr?: number,
+  ): WASIFarmRef {
     return new WASIFarmRefUseArrayBuffer(
       this.allocator,
       this.lock_fds,
       this.fd_func_sig,
       this.fds_len,
+      stdin,
+      stdout,
+      stderr,
     );
   }
 

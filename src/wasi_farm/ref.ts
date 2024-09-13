@@ -3,7 +3,6 @@ import * as wasi from "../wasi_defs.js";
 export abstract class WASIFarmRef {
   abstract get_ref(): WASIFarmRef;
   abstract get_fds_len(): number;
-  abstract is_fd_valid(fd: number): boolean;
   // please implement this method
   // abstract init_self(sl: WASIFarmRef): WASIFarmRef;
 

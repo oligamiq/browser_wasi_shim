@@ -4,7 +4,11 @@ import * as wasi from "../wasi_defs.js";
 import { debug } from "../debug.js";
 
 export abstract class WASIFarmPark {
-  abstract get_ref(): WASIFarmRef;
+  abstract get_ref(
+    stdin?: number,
+    stdout?: number,
+    stderr?: number,
+  ): WASIFarmRef;
   abstract listen(): void;
   abstract notify_push_fd(fd: number): void;
 

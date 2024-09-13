@@ -86,9 +86,7 @@ export class WASIFarmAnimal {
         if (j === stdin || j === stdout || j === stderr) {
           continue;
         }
-        if (wasi_farm_ref.is_fd_valid(j)) {
-          this.fd_map.push([j, i]);
-        }
+        this.set_new_fd(j, i);
       }
     }
     if (this.fd_map[0] === undefined) {
@@ -102,7 +100,7 @@ export class WASIFarmAnimal {
     }
   }
 
-  private set_new_fd(fd: number, wasi_ref_n: number) {
+  private set_new_fd(fd: number, wasi_ref_n: number): number {
     let n = -1;
     // 0, 1, 2 are reserved for stdin, stdout, stderr
     for (let i = 3; i < this.fd_map.length; i++) {
@@ -112,9 +110,10 @@ export class WASIFarmAnimal {
       }
     }
     if (n === -1) {
-      n = this.fd_map.length;
+      n = this.fd_map.push(undefined) - 1;
     }
     this.fd_map[n] = [fd, wasi_ref_n];
+    return n;
   }
 
   constructor(
@@ -147,6 +146,8 @@ export class WASIFarmAnimal {
             }
         }
     }
+
+    this.mapping_fds(this.wasi_farm_refs);
 
     this.args = args;
     this.env = env;
