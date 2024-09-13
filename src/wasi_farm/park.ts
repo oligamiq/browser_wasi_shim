@@ -10,7 +10,8 @@ export abstract class WASIFarmPark {
     stderr?: number,
   ): WASIFarmRef;
   abstract listen(): void;
-  abstract notify_push_fd(fd: number): void;
+  abstract notify_set_fd(fd: number): void;
+  abstract notify_rm_fd(fd: number): void;
 
   protected fds: Array<Fd>;
 
@@ -32,25 +33,21 @@ export abstract class WASIFarmPark {
             break;
           }
         }
-        let is_notify = false;
         if (ret == -1) {
           ret = this.fds.length;
           // console.log("push_fd", this.fds.length)
           // this.fds.push(undefined);
           console.log("push_fd", this.fds.length)
-          is_notify = true;
         }
+        // If it's assigned, it's resolved.
         resolve([() => {
           this.get_new_fd_lock.shift();
           const fn = this.get_new_fd_lock[0];
           if (fn != undefined) {
             fn();
           }
-          if (is_notify) {
-            // console.log("notify_push_fd", this.fds.length)
-            // console.log("notify_push_fd", this.fds[ret])
-            this.notify_push_fd(ret);
-          }
+          // assigned and notify
+          this.notify_set_fd(ret);
         }, ret]);
       });
       if (len == 1) {
@@ -296,6 +293,20 @@ export abstract class WASIFarmPark {
       return [[array, buf_used], wasi.ERRNO_SUCCESS];
     } else {
       return [undefined, wasi.ERRNO_BADF];
+    }
+  }
+
+  protected fd_renumber(fd: number, to: number): number {
+    if (this.fds[fd] != undefined) {
+      const ret = this.fds[fd].fd_close();
+      if (ret != wasi.ERRNO_SUCCESS) {
+        return ret;
+      }
+      this.fds[to] = this.fds[fd];
+      this.fds[fd] = undefined;
+      return wasi.ERRNO_SUCCESS;
+    } else {
+      return wasi.ERRNO_BADF;
     }
   }
 

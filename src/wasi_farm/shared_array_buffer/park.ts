@@ -111,7 +111,8 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     );
   }
 
-  notify_push_fd(fd: number) {
+  // TODO!
+  notify_set_fd(fd: number) {
     console.warn("notify_push_fd", fd);
 
     if (this.fds[fd] == undefined) {
@@ -124,6 +125,10 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
 
     const view = new Int32Array(this.fds_len);
     Atomics.add(view, 0, 1);
+  }
+
+  // TODO!
+  notify_rm_fd(fd: number) {
   }
 
   /// listener

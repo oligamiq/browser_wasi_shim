@@ -86,7 +86,7 @@ export class WASIFarmAnimal {
         if (j === stdin || j === stdout || j === stderr) {
           continue;
         }
-        this.set_new_fd(j, i);
+        this.map_new_fd(j, i);
       }
     }
     if (this.fd_map[0] === undefined) {
@@ -100,7 +100,7 @@ export class WASIFarmAnimal {
     }
   }
 
-  private set_new_fd(fd: number, wasi_ref_n: number): number {
+  private map_new_fd(fd: number, wasi_ref_n: number): number {
     let n = -1;
     // 0, 1, 2 are reserved for stdin, stdout, stderr
     for (let i = 3; i < this.fd_map.length; i++) {
