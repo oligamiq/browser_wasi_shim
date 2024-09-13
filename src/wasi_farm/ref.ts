@@ -9,6 +9,28 @@ export abstract class WASIFarmRef {
   protected stdout: number | undefined;
   protected stderr: number | undefined;
 
+  constructor(
+    stdin: number | undefined,
+    stdout: number | undefined,
+    stderr: number | undefined,
+  ) {
+    this.stdin = stdin;
+    this.stdout = stdout;
+    this.stderr = stderr;
+  }
+
+  get_stdin(): number | undefined {
+    return this.stdin;
+  }
+
+  get_stdout(): number | undefined {
+    return this.stdout;
+  }
+
+  get_stderr(): number | undefined {
+    return this.stderr;
+  }
+
   abstract fd_advise(fd: number | undefined): number;
   abstract fd_allocate(fd: number | undefined, offset: bigint, len: bigint): number;
   abstract fd_close(fd: number | undefined): number;

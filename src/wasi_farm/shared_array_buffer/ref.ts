@@ -14,8 +14,11 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     lock_fds: SharedArrayBuffer,
     fds_len: SharedArrayBuffer,
     fd_func_sig: SharedArrayBuffer,
+    stdin?: number,
+    stdout?: number,
+    stderr?: number,
   ) {
-    super();
+    super(stdin, stdout, stderr);
     if (allocator instanceof Allocator === false) {
       this.allocator = Allocator.init_self(allocator);
     } else {
@@ -41,6 +44,9 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
       sl.lock_fds,
       sl.fd_func_sig,
       sl.fds_len,
+      sl.stdin,
+      sl.stdout,
+      sl.stderr,
     );
   }
 

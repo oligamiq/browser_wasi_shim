@@ -88,7 +88,9 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     stderr?: Fd,
     fds: Array<Fd> = []
   ) {
-    super(fds);
+    const new_fds = [stdin, stdout, stderr, ...fds];
+
+    super(new_fds);
 
     this.allocator = new Allocator();
     const max_fds_len = 128;

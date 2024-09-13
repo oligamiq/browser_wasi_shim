@@ -20,17 +20,19 @@ export class WASIFarmAnimal {
   // If it does not exist in the map, it cannot be accessed.
   // child process can access parent process's fd.
   // so, it is necessary to manage the fd on global scope.
-  protected fd_map: Map<number, number> = new Map();
+  protected fd_map: Map<number, [number, number]> = new Map();
 
   protected rm_fd_from_map(fd: number) {
     this.fd_map.delete(fd);
   }
 
   protected get_fd_and_wasi_ref(fd: number): [number, WASIFarmRef] {
-    const mapped_fd = this.fd_map.get(fd);
-    if (!mapped_fd) {
+    const mapped_fd_and_wasi_ref_n = this.fd_map.get(fd);
+    if (!mapped_fd_and_wasi_ref_n) {
       throw new Error("fd not found");
     }
+    const [mapped_fd, wasi_ref_n] = mapped_fd_and_wasi_ref_n;
+    return [mapped_fd, this.wasi_farm_ref[wasi_ref_n]];
   }
 
   /// Start a WASI command
