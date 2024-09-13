@@ -33,9 +33,9 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     return this;
   }
 
-  get_fds_len(fd: number): number {
+  get_fds_len(): number {
     const view = new Int32Array(this.fds_len);
-    return Atomics.load(view, fd);
+    return Atomics.load(view, 0);
   }
 
   static init_self(sl: WASIFarmRefUseArrayBuffer): WASIFarmRef {

@@ -8,7 +8,7 @@ export class WASIFarmAnimal {
   private args: Array<string>;
   private env: Array<string>;
 
-  private wasi_farm_ref: WASIFarmRef[];
+  private wasi_farm_refs: WASIFarmRef[];
 
   private inst: { exports: { memory: WebAssembly.Memory } };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -20,19 +20,20 @@ export class WASIFarmAnimal {
   // If it does not exist in the map, it cannot be accessed.
   // child process can access parent process's fd.
   // so, it is necessary to manage the fd on global scope.
-  protected fd_map: Map<number, [number, number]> = new Map();
+  // [fd, wasi_ref_n]
+  protected fd_map: Array<[number, number]>;
 
   protected rm_fd_from_map(fd: number) {
-    this.fd_map.delete(fd);
+    this.fd_map[fd] = undefined;
   }
 
   protected get_fd_and_wasi_ref(fd: number): [number, WASIFarmRef] {
-    const mapped_fd_and_wasi_ref_n = this.fd_map.get(fd);
+    const mapped_fd_and_wasi_ref_n = this.fd_map[fd];
     if (!mapped_fd_and_wasi_ref_n) {
       throw new Error("fd not found");
     }
     const [mapped_fd, wasi_ref_n] = mapped_fd_and_wasi_ref_n;
-    return [mapped_fd, this.wasi_farm_ref[wasi_ref_n]];
+    return [mapped_fd, this.wasi_farm_refs[wasi_ref_n]];
   }
 
   /// Start a WASI command
@@ -63,18 +64,71 @@ export class WASIFarmAnimal {
     }
   }
 
+  private mapping_fds(
+    wasi_farm_refs: Array<WASIFarmRef>,
+  ) {
+    this.fd_map = [];
+    for (let i = 0; i < wasi_farm_refs.length; i++) {
+      const wasi_farm_ref = wasi_farm_refs[i];
+      const stdin = wasi_farm_ref.get_stdin();
+      const stdout = wasi_farm_ref.get_stdout();
+      const stderr = wasi_farm_ref.get_stderr();
+      if (stdin !== undefined) {
+        this.fd_map[0] = [stdin, i];
+      }
+      if (stdout !== undefined) {
+        this.fd_map[1] = [stdout, i];
+      }
+      if (stderr !== undefined) {
+        this.fd_map[2] = [stderr, i];
+      }
+      for (let j = 0; j < wasi_farm_ref.get_fds_len(); j++) {
+        if (j === stdin || j === stdout || j === stderr) {
+          continue;
+        }
+        if (wasi_farm_ref.is_fd_valid(j)) {
+          this.fd_map.push([j, i]);
+        }
+      }
+    }
+    if (this.fd_map[0] === undefined) {
+      throw new Error("stdin is not found");
+    }
+    if (this.fd_map[1] === undefined) {
+      throw new Error("stdout is not found");
+    }
+    if (this.fd_map[2] === undefined) {
+      throw new Error("stderr is not found");
+    }
+  }
+
+  private set_new_fd(fd: number, wasi_ref_n: number) {
+    let n = -1;
+    // 0, 1, 2 are reserved for stdin, stdout, stderr
+    for (let i = 3; i < this.fd_map.length; i++) {
+      if (this.fd_map[i] === undefined) {
+        n = i;
+        break;
+      }
+    }
+    if (n === -1) {
+      n = this.fd_map.length;
+    }
+    this.fd_map[n] = [fd, wasi_ref_n];
+  }
+
   constructor(
-    wasi_farm_ref: WASIFarmRef[] | WASIFarmRef,
+    wasi_farm_refs: WASIFarmRef[] | WASIFarmRef,
     args: Array<string>,
     env: Array<string>,
     options: Options = {},
   ) {
     debug.enable(options.debug);
 
-    if (Array.isArray(wasi_farm_ref)) {
-        this.wasi_farm_ref = [wasi_farm_ref as unknown as WASIFarmRef];
+    if (Array.isArray(wasi_farm_refs)) {
+        this.wasi_farm_refs = [wasi_farm_refs as unknown as WASIFarmRef];
     } else {
-        this.wasi_farm_ref = wasi_farm_ref as unknown as Array<WASIFarmRef>;
+        this.wasi_farm_refs = wasi_farm_refs as unknown as Array<WASIFarmRef>;
     }
 
     try {
@@ -84,10 +138,10 @@ export class WASIFarmAnimal {
         this.can_array_buffer = false;
     }
 
-    for (let i = 0; i < this.wasi_farm_ref.length; i++) {
-        if (!(this.wasi_farm_ref[i] instanceof WASIFarmRef)) {
+    for (let i = 0; i < this.wasi_farm_refs.length; i++) {
+        if (!(this.wasi_farm_refs[i] instanceof WASIFarmRef)) {
             if (this.can_array_buffer) {
-                this.wasi_farm_ref[i] = WASIFarmRefUseArrayBuffer.init_self(wasi_farm_ref[i] as WASIFarmRefUseArrayBuffer);
+                this.wasi_farm_refs[i] = WASIFarmRefUseArrayBuffer.init_self(wasi_farm_refs[i] as WASIFarmRefUseArrayBuffer);
             } else {
                 throw new Error("SharedArrayBuffer is not supported yet");
             }
