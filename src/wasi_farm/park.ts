@@ -77,6 +77,7 @@ export abstract class WASIFarmPark {
     if (this.fds[fd] != undefined) {
       const ret = this.fds[fd].fd_close();
       this.fds[fd] = undefined;
+      this.notify_rm_fd(fd);
       return ret;
     } else {
       return wasi.ERRNO_BADF;
@@ -304,6 +305,7 @@ export abstract class WASIFarmPark {
       }
       this.fds[to] = this.fds[fd];
       this.fds[fd] = undefined;
+      this.notify_rm_fd(fd);
       return wasi.ERRNO_SUCCESS;
     } else {
       return wasi.ERRNO_BADF;

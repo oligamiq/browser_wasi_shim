@@ -127,12 +127,14 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     Atomics.add(view, 0, 1);
   }
 
-  // TODO!
-  notify_rm_fd(fd: number) {
+  async notify_rm_fd(fd: number) {
+    await this.listen_fds[fd];
+    this.listen_fds[fd] = undefined;
   }
 
   /// listener
   listen() {
+    this.listen_fds = [];
     for (let n = 0; n < this.fds.length; n++) {
       this.listen_fds.push(this.listen_fd(n));
     }
@@ -690,6 +692,11 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
         if (old_call_lock !== 1) {
           throw new Error("Call is already set");
         }
+
+        if (this.fds[fd_n] === undefined) {
+          break;
+        }
+
         const n = Atomics.notify(lock_view, lock_offset + 1);
         if (n !== 1) {
           if (n === 0) {
