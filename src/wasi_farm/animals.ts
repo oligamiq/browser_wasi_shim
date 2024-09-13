@@ -9,7 +9,7 @@ export class WASIFarmAnimal {
   private args: Array<string>;
   private env: Array<string>;
 
-  private wasi_farm_ref: WASIFarmRef;
+  private wasi_farm_ref: WASIFarmRef[];
 
   private inst: { exports: { memory: WebAssembly.Memory } };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -25,6 +25,10 @@ export class WASIFarmAnimal {
 
   protected rm_fd_from_map(fd: number) {
     this.fd_map.delete(fd);
+  }
+
+  protected get_fd_and_wasi_ref(fd: number): [number, WASIFarmRef] {
+
   }
 
   /// Start a WASI command
@@ -56,35 +60,34 @@ export class WASIFarmAnimal {
   }
 
   constructor(
-    wasi_farm_ref: WASIFarmRef,
+    wasi_farm_ref: WASIFarmRef[] | WASIFarmRef,
     args: Array<string>,
     env: Array<string>,
-    stdin?: Fd,
-    stdout?: Fd,
-    stderr?: Fd,
     options: Options = {},
   ) {
     debug.enable(options.debug);
 
-    if (wasi_farm_ref instanceof WASIFarmRef) {
-      this.wasi_farm_ref = wasi_farm_ref;
+    if (Array.isArray(wasi_farm_ref)) {
+        this.wasi_farm_ref = [wasi_farm_ref as unknown as WASIFarmRef];
     } else {
-      try {
-        new SharedArrayBuffer(4);
-        this.can_array_buffer = true;
-      } catch (_) {
-        this.can_array_buffer = false;
-      }
-
-      if (this.can_array_buffer) {
-        this.wasi_farm_ref = WASIFarmRefUseArrayBuffer.init_self(wasi_farm_ref as WASIFarmRefUseArrayBuffer);
-      }
+        this.wasi_farm_ref = wasi_farm_ref as unknown as Array<WASIFarmRef>;
     }
 
-    if (stdin) {
-      const 
-    } else {
-      this.fd_map.set(0, 0);
+    try {
+        new SharedArrayBuffer(4);
+        this.can_array_buffer = true;
+    } catch (_) {
+        this.can_array_buffer = false;
+    }
+
+    for (let i = 0; i < this.wasi_farm_ref.length; i++) {
+        if (!(this.wasi_farm_ref[i] instanceof WASIFarmRef)) {
+            if (this.can_array_buffer) {
+                this.wasi_farm_ref[i] = WASIFarmRefUseArrayBuffer.init_self(wasi_farm_ref[i] as WASIFarmRefUseArrayBuffer);
+            } else {
+                throw new Error("SharedArrayBuffer is not supported yet");
+            }
+        }
     }
 
     this.args = args;
