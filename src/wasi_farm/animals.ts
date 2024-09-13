@@ -28,7 +28,10 @@ export class WASIFarmAnimal {
   }
 
   protected get_fd_and_wasi_ref(fd: number): [number, WASIFarmRef] {
-
+    const mapped_fd = this.fd_map.get(fd);
+    if (!mapped_fd) {
+      throw new Error("fd not found");
+    }
   }
 
   /// Start a WASI command

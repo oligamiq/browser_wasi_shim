@@ -5,6 +5,10 @@ export abstract class WASIFarmRef {
   // please implement this method
   // abstract init_self(sl: WASIFarmRef): WASIFarmRef;
 
+  protected stdin: number | undefined;
+  protected stdout: number | undefined;
+  protected stderr: number | undefined;
+
   abstract fd_advise(fd: number | undefined): number;
   abstract fd_allocate(fd: number | undefined, offset: bigint, len: bigint): number;
   abstract fd_close(fd: number | undefined): number;
