@@ -10,7 +10,9 @@ export abstract class WASIFarmPark {
 
   protected fds: Array<Fd>;
 
-  constructor(fds: Array<Fd>) {
+  constructor(
+    fds: Array<Fd>,
+  ) {
     this.fds = fds;
   }
 

@@ -81,7 +81,13 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
   private listen_fds: Array<Promise<void>> = [];
 
   private fd_func_sig: SharedArrayBuffer;
-  constructor(fds: Array<Fd>) {
+
+  constructor(
+    stdin?: Fd,
+    stdout?: Fd,
+    stderr?: Fd,
+    fds: Array<Fd> = []
+  ) {
     super(fds);
 
     this.allocator = new Allocator();

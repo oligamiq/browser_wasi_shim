@@ -3,7 +3,6 @@ import { Options, WASIProcExit } from "../wasi.js";
 import { WASIFarmRef } from "./ref.js";
 import * as wasi from "../wasi_defs.js";
 import { WASIFarmRefUseArrayBuffer } from "./shared_array_buffer/ref.js";
-import { Fd } from "../fd.js";
 
 export class WASIFarmAnimal {
   private args: Array<string>;
