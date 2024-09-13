@@ -111,7 +111,6 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     );
   }
 
-  // TODO!
   notify_set_fd(fd: number) {
     console.warn("notify_push_fd", fd);
 
