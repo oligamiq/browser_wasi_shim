@@ -23,6 +23,10 @@ export abstract class WASIFarmPark {
 
   private get_new_fd_lock = new Array<() => Promise<void>>();
 
+  // If the reassigned value is accessed after being closed,
+  // it will be strange,
+  // but the programmer should have written it
+  // so that this does not happen in the first place.
   private async get_new_fd(): Promise<[() => void, number]> {
     const promise = new Promise<[() => void, number]>((resolve) => {
       const len = this.get_new_fd_lock.push(async () => {

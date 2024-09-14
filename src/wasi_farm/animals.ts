@@ -142,7 +142,7 @@ export class WASIFarmAnimal {
             if (this.can_array_buffer) {
                 this.wasi_farm_refs[i] = WASIFarmRefUseArrayBuffer.init_self(wasi_farm_refs[i] as WASIFarmRefUseArrayBuffer);
             } else {
-                throw new Error("SharedArrayBuffer is not supported yet");
+                throw new Error("Non SharedArrayBuffer is not supported yet");
             }
         }
     }

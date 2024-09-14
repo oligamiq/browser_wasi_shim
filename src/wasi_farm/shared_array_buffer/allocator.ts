@@ -55,9 +55,9 @@ export class Allocator {
     // I32Arrayのret_ptrを渡す
     ret_ptr: number,
   ): Promise<void> {
+    const view = new Int32Array(this.share_arrays_memory);
     // eslint-disable-next-line no-constant-condition
     while (true) {
-      const view = new Int32Array(this.share_arrays_memory);
       let lock: "not-equal" | "timed-out" | "ok";
       const { value } = Atomics.waitAsync(view, 0, 1);
       if (value instanceof Promise) {
