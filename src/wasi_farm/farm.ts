@@ -11,10 +11,6 @@ export class WASIFarm {
 
   private can_array_buffer;
 
-  private stdin?: number;
-  private stdout?: number;
-  private stderr?: number;
-
   constructor(
     stdin?: Fd,
     stdout?: Fd,
@@ -25,19 +21,27 @@ export class WASIFarm {
     debug.enable(options.debug);
 
     const new_fds = [];
+    let stdin_ = undefined;
+    let stdout_ = undefined;
+    let stderr_ = undefined;
     if (stdin) {
       new_fds.push(stdin);
-      this.stdin = new_fds.length - 1;
+      stdin_ = new_fds.length - 1;
     }
     if (stdout) {
       new_fds.push(stdout);
-      this.stdout = new_fds.length - 1;
+      stdout_ = new_fds.length - 1;
     }
     if (stderr) {
       new_fds.push(stderr);
-      this.stderr = new_fds.length - 1;
+      stderr_ = new_fds.length - 1;
     }
     new_fds.push(...fds);
+
+    const default_allow_fds = [];
+    for (let i = 0; i < new_fds.length; i++) {
+      default_allow_fds.push(i);
+    }
 
     this.fds = new_fds;
 
@@ -50,8 +54,14 @@ export class WASIFarm {
 
     if (this.can_array_buffer) {
       this.park = new WASIFarmParkUseArrayBuffer(
-        this.fds_ref()
+        this.fds_ref(),
+        stdin_,
+        stdout_,
+        stderr_,
+        default_allow_fds,
       );
+    } else {
+      throw new Error("Non SharedArrayBuffer is not supported yet");
     }
 
     this.park.listen();
@@ -82,10 +92,6 @@ export class WASIFarm {
   }
 
   get_ref(): WASIFarmRef {
-    return this.park.get_ref(
-      this.stdin,
-      this.stdout,
-      this.stderr,
-    );
+    return this.park.get_ref();
   }
 }

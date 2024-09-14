@@ -1,4 +1,5 @@
 import * as wasi from "../wasi_defs.js";
+import { FdCloseSender } from "./sender.js";
 
 export abstract class WASIFarmRef {
   abstract get_ref(): WASIFarmRef;
@@ -12,16 +13,32 @@ export abstract class WASIFarmRef {
 
   protected id: number;
 
+  fd_close_receiver: FdCloseSender;
+
+  default_fds: Array<number> = [];
+
+  async send(targets: Array<number>, fd: number): Promise<void> {
+    await this.fd_close_receiver.send(targets, fd);
+  }
+
+  get(id: number): Array<number> | undefined {
+    return this.fd_close_receiver.get(id);
+  }
+
+  abstract set_park_fds_map(fds: Array<number>);
+
   abstract set_id(): number;
 
   constructor(
     stdin: number | undefined,
     stdout: number | undefined,
     stderr: number | undefined,
+    fd_close_receiver: FdCloseSender,
   ) {
     this.stdin = stdin;
     this.stdout = stdout;
     this.stderr = stderr;
+    this.fd_close_receiver = fd_close_receiver;
   }
 
   get_stdin(): number | undefined {

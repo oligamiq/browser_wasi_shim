@@ -1,6 +1,4 @@
-import { ToRefSender } from "../sender";
-
-export abstract class ToRefSenderUseArrayBuffer extends ToRefSender {
+export abstract class ToRefSenderUseArrayBuffer {
   // 構造としては、allocatorに近いが、仕組みが違う
 
   // fd管理の例
@@ -36,8 +34,6 @@ export abstract class ToRefSenderUseArrayBuffer extends ToRefSender {
     max_share_arrays_memory: number = 100 * 1024,
     share_arrays_memory?: SharedArrayBuffer,
   ) {
-    super();
-
     this.data_size = data_size;
     if (share_arrays_memory) {
       this.share_arrays_memory = share_arrays_memory;
@@ -48,6 +44,20 @@ export abstract class ToRefSenderUseArrayBuffer extends ToRefSender {
     Atomics.store(view, 0, 0);
     Atomics.store(view, 1, 0);
     Atomics.store(view, 2, 12);
+  }
+
+  protected static init_self_inner(
+    sl: ToRefSenderUseArrayBuffer,
+  ): {
+    data_size: number,
+    max_share_arrays_memory: number,
+    share_arrays_memory: SharedArrayBuffer,
+  } {
+    return {
+      data_size: sl.data_size,
+      max_share_arrays_memory: sl.share_arrays_memory.byteLength,
+      share_arrays_memory: sl.share_arrays_memory,
+    };
   }
 
   private async async_lock(): Promise<void> {

@@ -1,15 +1,17 @@
 import { Fd } from "../../fd.js";
 import * as wasi from "../../wasi_defs.js";
-import { Allocator } from "./allocator.js";
+import { AllocatorUseArrayBuffer } from "./allocator.js";
 import { WASIFarmRef } from "../ref.js";
 import { WASIFarmPark } from "../park.js";
 import { WASIFarmRefUseArrayBuffer } from "./ref.js";
 import { get_func_name_from_number } from "./util.js";
+import { FdCloseSender } from "../sender.js";
+import { FdCloseSenderUseArrayBuffer } from "./fd_close_sender.js";
 
 export const fd_func_sig_size: number = 18;
 
 export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
-  private allocator: Allocator;
+  private allocator: AllocatorUseArrayBuffer;
 
   // args, envは変更されないので、コピーで良い
   // fdsに依存しない関数は飛ばす
@@ -81,32 +83,48 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
 
   private fd_func_sig: SharedArrayBuffer;
 
-  constructor(
-    fds: Array<Fd> = []
-  ) {
-    super(fds);
+  private listen_base_handle: Promise<void>;
 
-    this.allocator = new Allocator();
+  private base_func_util: SharedArrayBuffer;
+
+  private fd_close_receiver: FdCloseSender;
+
+  constructor(
+    fds: Array<Fd> = [],
+    stdin: number | undefined,
+    stdout: number | undefined,
+    stderr: number | undefined,
+    default_allow_fds: Array<number>,
+  ) {
+    super(
+      fds,
+      stdin,
+      stdout,
+      stderr,
+      default_allow_fds,
+    );
+
+    this.allocator = new AllocatorUseArrayBuffer();
     const max_fds_len = 128;
     this.lock_fds = new SharedArrayBuffer(4 * max_fds_len * 3);
     this.fd_func_sig = new SharedArrayBuffer(fd_func_sig_size * 4 * max_fds_len);
     this.fds_len_and_num = new SharedArrayBuffer(8);
+    this.fd_close_receiver = new FdCloseSenderUseArrayBuffer();
+    this.base_func_util = new SharedArrayBuffer(24);
   }
 
   /// これをpostMessageで送る
-  get_ref(
-    stdin?: number,
-    stdout?: number,
-    stderr?: number,
-  ): WASIFarmRef {
+  get_ref(): WASIFarmRef {
     return new WASIFarmRefUseArrayBuffer(
       this.allocator,
       this.lock_fds,
-      this.fd_func_sig,
       this.fds_len_and_num,
-      stdin,
-      stdout,
-      stderr,
+      this.fd_func_sig,
+      this.base_func_util,
+      this.fd_close_receiver,
+      this.stdin,
+      this.stdout,
+      this.stderr,
     );
   }
 
@@ -128,6 +146,8 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
   async notify_rm_fd(fd: number) {
     await this.listen_fds[fd];
     this.listen_fds[fd] = undefined;
+
+    await this.fd_close_receiver.send(this.fds_map[fd], fd);
   }
 
   /// listener
@@ -135,6 +155,62 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     this.listen_fds = [];
     for (let n = 0; n < this.fds.length; n++) {
       this.listen_fds.push(this.listen_fd(n));
+    }
+    this.listen_base_handle = this.listen_base();
+  }
+
+  async listen_base() {
+    const lock_view = new Int32Array(this.base_func_util);
+    Atomics.store(lock_view, 0, 0);
+    Atomics.store(lock_view, 1, 0);
+
+    // eslint-disable-next-line no-constant-condition
+    while(true) {
+      try {
+        let lock: "not-equal" | "timed-out" | "ok";
+
+        const { value } = Atomics.waitAsync(lock_view, 1, 0);
+        if ( value instanceof Promise) {
+          lock = await value;
+        } else {
+          lock = value;
+        }
+        if (lock === "timed-out") {
+          throw new Error("timed-out");
+        }
+
+        const func_number = Atomics.load(lock_view, 2);
+
+        // console.log("called: func: ", get_func_name_from_number(func_number), "base");
+
+        switcher: switch (func_number) {
+          // set_fds_map: (fds_ptr: u32, fds_len: u32);
+          case 0: {
+            const ptr = Atomics.load(lock_view, 3);
+            const len = Atomics.load(lock_view, 4);
+            const data = new Uint32Array(this.allocator.get_memory(ptr, len));
+            this.allocator.free(ptr, len);
+            const wasi_farm_ref_id = Atomics.load(lock_view, 5);
+
+            this.fds_map = [];
+            for (let i = 0; i < len / 4; i++) {
+              this.fds_map[data[i]].push(wasi_farm_ref_id);
+            }
+
+            break switcher;
+          }
+        }
+
+        const old_call_lock = Atomics.exchange(lock_view, 1, 0);
+        if (old_call_lock !== 1) {
+          throw new Error("Lock is already set");
+        }
+        Atomics.notify(lock_view, 1, 1);
+      } catch (e) {
+        console.error("error", e);
+        Atomics.store(lock_view, 1, 0);
+        Atomics.notify(lock_view, 1, 1);
+      }
     }
   }
 

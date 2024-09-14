@@ -1,33 +1,45 @@
 import { WASIFarmRef } from "../ref.js";
-import { Allocator } from "./allocator.js";
+import { AllocatorUseArrayBuffer } from "./allocator.js";
 import { fd_func_sig_size } from "./park.js";
 import * as wasi from "../../wasi_defs.js";
+import { FdCloseSender } from "../sender.js";
+import { FdCloseSenderUseArrayBuffer } from "./fd_close_sender.js";
 
 export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
-  allocator: Allocator;
+  allocator: AllocatorUseArrayBuffer;
   lock_fds: SharedArrayBuffer;
   // byte 1: fds_len
-  // byte 2: all wasi_farm_ref
+  // byte 2: all wasi_farm_ref num
   fds_len_and_num: SharedArrayBuffer;
   fd_func_sig: SharedArrayBuffer;
+  base_func_util: SharedArrayBuffer;
 
   constructor(
-    allocator: Allocator,
+    allocator: AllocatorUseArrayBuffer,
     lock_fds: SharedArrayBuffer,
     fds_len_and_num: SharedArrayBuffer,
     fd_func_sig: SharedArrayBuffer,
-    stdin?: number,
-    stdout?: number,
-    stderr?: number,
+    base_func_util: SharedArrayBuffer,
+    fd_close_receiver: FdCloseSender,
+    stdin: number | undefined,
+    stdout: number | undefined,
+    stderr: number | undefined,
   ) {
-    super(stdin, stdout, stderr);
-    if (allocator instanceof Allocator === false) {
-      this.allocator = Allocator.init_self(allocator);
+    if (fd_close_receiver instanceof FdCloseSenderUseArrayBuffer) {
+      super(stdin, stdout, stderr, fd_close_receiver);
+    } else {
+      super(stdin, stdout, stderr, FdCloseSenderUseArrayBuffer.init_self(
+        fd_close_receiver as FdCloseSenderUseArrayBuffer
+      ));
+    }
+    if (allocator instanceof AllocatorUseArrayBuffer === false) {
+      this.allocator = AllocatorUseArrayBuffer.init_self(allocator);
     } else {
       this.allocator = allocator;
     }
     this.lock_fds = lock_fds;
     this.fd_func_sig = fd_func_sig;
+    this.base_func_util = base_func_util;
     this.fds_len_and_num = fds_len_and_num;
 
     const view = new Int32Array(this.fds_len_and_num);
@@ -47,8 +59,10 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     return new WASIFarmRefUseArrayBuffer(
       sl.allocator,
       sl.lock_fds,
-      sl.fd_func_sig,
       sl.fds_len_and_num,
+      sl.fd_func_sig,
+      sl.base_func_util,
+      sl.fd_close_receiver,
       sl.stdin,
       sl.stdout,
       sl.stderr,
@@ -60,6 +74,56 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     const id = Atomics.add(view, 1, 1);
     this.id = id;
     return id;
+  }
+
+  private lock_base_func_util(): void {
+    const view = new Int32Array(this.base_func_util);
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const lock = Atomics.wait(view, 0, 1);
+      if (lock === "timed-out") {
+        throw new Error("timed-out lock");
+      }
+      const old = Atomics.compareExchange(view, 0, 0, 1);
+      if (old !== 0) {
+        continue;
+      }
+      break;
+    }
+  }
+
+  private call_base_func_util(): void {
+    const view = new Int32Array(this.base_func_util);
+    const old = Atomics.exchange(view, 1, 1);
+    if (old !== 0) {
+      console.error("what happened?");
+    }
+    Atomics.notify(view, 1, 1);
+  }
+
+  private wait_base_func_util(): void {
+    const view = new Int32Array(this.base_func_util);
+    const lock = Atomics.wait(view, 1, 1);
+    if (lock === "timed-out") {
+      throw new Error("timed-out lock");
+    }
+  }
+
+  private release_base_func_util(): void {
+    const view = new Int32Array(this.base_func_util);
+    Atomics.store(view, 0, 0);
+    Atomics.notify(view, 0, 1);
+  }
+
+  set_park_fds_map(fds: Array<number>): void {
+    this.lock_base_func_util();
+    const view = new Int32Array(this.base_func_util);
+    Atomics.store(view, 2, 0);
+    this.allocator.block_write(new Uint32Array(fds), this.base_func_util, 3);
+    Atomics.store(view, 4, this.id);
+    this.call_base_func_util();
+    this.wait_base_func_util();
+    this.release_base_func_util();
   }
 
   private lock_fd(fd: number) {

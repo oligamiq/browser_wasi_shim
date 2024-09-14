@@ -2,7 +2,7 @@
 // import { debug } from "../../debug.js";
 import "../polyfill.js";
 
-export class Allocator {
+export class AllocatorUseArrayBuffer {
   // !Sizedを渡す
   // 最初の4byteはロック用の値: i32
   // 次の4byteは現在のarrayの数: m: i32
@@ -43,9 +43,9 @@ export class Allocator {
   }
 
   static init_self(
-    sl: Allocator,
-  ): Allocator {
-    return new Allocator(sl.share_arrays_memory);
+    sl: AllocatorUseArrayBuffer,
+  ): AllocatorUseArrayBuffer {
+    return new AllocatorUseArrayBuffer(sl.share_arrays_memory);
   }
 
   async async_write(

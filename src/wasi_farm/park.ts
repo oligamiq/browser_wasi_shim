@@ -4,24 +4,36 @@ import * as wasi from "../wasi_defs.js";
 import { debug } from "../debug.js";
 
 export abstract class WASIFarmPark {
-  abstract get_ref(
-    stdin?: number,
-    stdout?: number,
-    stderr?: number,
-  ): WASIFarmRef;
+  abstract get_ref(): WASIFarmRef;
   abstract listen(): void;
   abstract notify_set_fd(fd: number): void;
   abstract notify_rm_fd(fd: number): void;
 
   protected fds: Array<Fd>;
+  protected stdin: number | undefined;
+  protected stdout: number | undefined;
+  protected stderr: number | undefined;
+  protected default_allow_fds: Array<number> = [];
 
   constructor(
     fds: Array<Fd>,
+    stdin: number | undefined,
+    stdout: number | undefined,
+    stderr: number | undefined,
+    default_allow_fds: Array<number>,
   ) {
     this.fds = fds;
+    this.stdin = stdin;
+    this.stdout = stdout;
+    this.stderr = stderr;
+    this.default_allow_fds = default_allow_fds;
+    this.fds_map = new Array(fds.length);
   }
 
   private get_new_fd_lock = new Array<() => Promise<void>>();
+
+  // fdに対して、現在そのfdにidがアクセス可能かを示す。
+  protected fds_map: Array<number[]>;
 
   // If the reassigned value is accessed after being closed,
   // it will be strange,

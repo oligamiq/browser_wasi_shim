@@ -1,6 +1,7 @@
+import { FdCloseSender } from "../sender";
 import { ToRefSenderUseArrayBuffer } from "./sender";
 
-export class FdCloseSenderUseArrayBuffer extends ToRefSenderUseArrayBuffer {
+export class FdCloseSenderUseArrayBuffer extends ToRefSenderUseArrayBuffer implements FdCloseSender {
   constructor(
     max_share_arrays_memory?: number,
     share_arrays_memory?: SharedArrayBuffer,
@@ -29,5 +30,15 @@ export class FdCloseSenderUseArrayBuffer extends ToRefSenderUseArrayBuffer {
     }
 
     return array;
+  }
+
+  static init_self(
+    sl: FdCloseSenderUseArrayBuffer,
+  ): FdCloseSender {
+    const sel = ToRefSenderUseArrayBuffer.init_self_inner(sl);
+    return new FdCloseSenderUseArrayBuffer(
+      sel.max_share_arrays_memory,
+      sel.share_arrays_memory,
+    );
   }
 }
