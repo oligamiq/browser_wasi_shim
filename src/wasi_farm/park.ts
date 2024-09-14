@@ -53,7 +53,7 @@ export abstract class WASIFarmPark {
           ret = this.fds.length;
           // console.log("push_fd", this.fds.length)
           // this.fds.push(undefined);
-          console.log("push_fd", this.fds.length)
+          // console.log("push_fd", this.fds.length)
         }
         // If it's assigned, it's resolved.
         resolve([() => {
@@ -89,11 +89,13 @@ export abstract class WASIFarmPark {
     }
   }
 
-  protected fd_close(fd: number): number {
+  protected async fd_close(fd: number): Promise<number> {
     if (this.fds[fd] != undefined) {
       const ret = this.fds[fd].fd_close();
       this.fds[fd] = undefined;
-      this.notify_rm_fd(fd);
+      // console.log("fd_close1", fd);
+      await this.notify_rm_fd(fd);
+      // console.log("fd_close2", fd);
       return ret;
     } else {
       return wasi.ERRNO_BADF;
@@ -313,7 +315,7 @@ export abstract class WASIFarmPark {
     }
   }
 
-  protected fd_renumber(fd: number, to: number): number {
+  protected async fd_renumber(fd: number, to: number): Promise<number> {
     if (this.fds[fd] != undefined) {
       const ret = this.fds[fd].fd_close();
       if (ret != wasi.ERRNO_SUCCESS) {
@@ -321,7 +323,7 @@ export abstract class WASIFarmPark {
       }
       this.fds[to] = this.fds[fd];
       this.fds[fd] = undefined;
-      this.notify_rm_fd(fd);
+      await this.notify_rm_fd(fd);
       return wasi.ERRNO_SUCCESS;
     } else {
       return wasi.ERRNO_BADF;

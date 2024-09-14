@@ -4,7 +4,6 @@ import { AllocatorUseArrayBuffer } from "./allocator.js";
 import { WASIFarmRef } from "../ref.js";
 import { WASIFarmPark } from "../park.js";
 import { WASIFarmRefUseArrayBuffer } from "./ref.js";
-import { get_func_name_from_number } from "./util.js";
 import { FdCloseSender } from "../sender.js";
 import { FdCloseSenderUseArrayBuffer } from "./fd_close_sender.js";
 
@@ -130,8 +129,6 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
   }
 
   notify_set_fd(fd: number) {
-    console.warn("notify_push_fd", fd);
-
     if (this.fds[fd] == undefined) {
       throw new Error("fd is not defined");
     }
@@ -145,8 +142,18 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
   }
 
   async notify_rm_fd(fd: number) {
-    await this.listen_fds[fd];
-    this.listen_fds[fd] = undefined;
+    (async () => {
+      const handle = this.listen_fds[fd];
+      if (handle === undefined) {
+        return;
+      }
+      this.listen_fds[fd] = undefined;
+      await handle;
+    })()
+
+    // console.log("notify_rm_fd", fd);
+    // console.log("fds", this.fds);
+    // console.log("fds_map", this.fds_map);
 
     await this.fd_close_receiver.send(this.fds_map[fd], fd);
   }
@@ -182,19 +189,23 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
 
         const func_number = Atomics.load(lock_view, 2);
 
-        // console.log("called: func: ", get_func_name_from_number(func_number), "base");
-
         switcher: switch (func_number) {
           // set_fds_map: (fds_ptr: u32, fds_len: u32);
           case 0: {
+            // console.log("set_fds_map");
             const ptr = Atomics.load(lock_view, 3);
             const len = Atomics.load(lock_view, 4);
+            // console.log("set_fds_map", ptr, len);
             const data = new Uint32Array(this.allocator.get_memory(ptr, len));
             this.allocator.free(ptr, len);
             const wasi_farm_ref_id = Atomics.load(lock_view, 5);
 
-            this.fds_map = [];
+            // console.log("set_fds_map", data, wasi_farm_ref_id);
+
             for (let i = 0; i < len / 4; i++) {
+              if (this.fds_map[data[i]] === undefined) {
+                this.fds_map[data[i]] = [];
+              }
               this.fds_map[data[i]].push(wasi_farm_ref_id);
             }
 
@@ -259,7 +270,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
 
         const func_number = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset);
 
-        console.log("called: func: ", get_func_name_from_number(func_number), "fd: ", fd_n);
+        // console.log("called: func: ", get_func_name_from_number(func_number), "fd: ", fd_n);
 
         switcher: switch (func_number) {
           // fd_advise: (fd: u32) => errno;
@@ -286,7 +297,13 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
           case 9: {
             const fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
 
-            const error = this.fd_close(fd);
+            const error = await this.fd_close(fd);
+
+            if (error === wasi.ERRNO_SUCCESS) {
+              this.fds_map[fd] = [];
+            }
+
+            // console.log("fd_close", fd, error);
 
             set_error(error);
             break switcher;
@@ -552,7 +569,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
 
             // console.log("allocator", this.allocator);
 
-            console.log("fd_write: park: write_data", new TextDecoder().decode(data));
+            // console.log("fd_write: park: write_data", new TextDecoder().decode(data));
 
             const [nwritten, error] = this.fd_write(fd, data);
 
@@ -768,10 +785,6 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
           throw new Error("Call is already set");
         }
 
-        if (this.fds[fd_n] === undefined) {
-          break;
-        }
-
         const n = Atomics.notify(lock_view, lock_offset + 1);
         if (n !== 1) {
           if (n === 0) {
@@ -779,6 +792,10 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
           } else {
             throw new Error("notify number is not 1: " + n);
           }
+        }
+
+        if (this.fds[fd_n] === undefined) {
+          break;
         }
       } catch (e) {
         console.error(e);

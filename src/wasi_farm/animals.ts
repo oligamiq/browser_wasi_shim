@@ -77,12 +77,12 @@ export class WASIFarmAnimal {
     override_fd_maps?: Array<number[]>,
   ) {
     this.fd_map = [];
-    console.log("wasi_farm_refs", wasi_farm_refs);
+    // console.log("wasi_farm_refs", wasi_farm_refs);
     for (let i = 0; i < wasi_farm_refs.length; i++) {
       const wasi_farm_ref = wasi_farm_refs[i];
-      console.log("override_fd_map", wasi_farm_ref.default_fds);
+      // console.log("override_fd_map", wasi_farm_ref.default_fds);
       const override_fd_map = override_fd_maps ? override_fd_maps[i] : wasi_farm_ref.default_fds;
-      console.log("override_fd_map", override_fd_map);
+      // console.log("override_fd_map", override_fd_map);
       const stdin = wasi_farm_ref.get_stdin();
       const stdout = wasi_farm_ref.get_stdout();
       const stderr = wasi_farm_ref.get_stderr();

@@ -78,6 +78,7 @@ export abstract class ToRefSenderUseArrayBuffer {
       if (old !== 0) {
         continue;
       }
+      break;
     }
   }
 
@@ -93,6 +94,7 @@ export abstract class ToRefSenderUseArrayBuffer {
       if (old !== 0) {
         continue;
       }
+      break;
     }
   }
 
@@ -110,9 +112,9 @@ export abstract class ToRefSenderUseArrayBuffer {
 
     const view = new Int32Array(this.share_arrays_memory);
     const used_len = Atomics.load(view, 2);
-    const data_len = data.length;
+    const data_len = data.byteLength;
     if (data_len !== this.data_size) {
-      throw new Error("invalid data size");
+      throw new Error("invalid data size: " + data_len + " !== " + this.data_size);
     }
     const new_used_len = used_len + data_len + 8 + targets.length * 4;
     if (new_used_len > this.share_arrays_memory.byteLength) {

@@ -122,9 +122,9 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     const view = new Int32Array(this.base_func_util);
     Atomics.store(view, 2, 0);
     const fds_array = new Uint32Array(fds);
-    console.log("fds_array", fds_array);
+    // console.log("fds_array", fds_array);
     this.allocator.block_write(fds_array, this.base_func_util, 3);
-    Atomics.store(view, 4, this.id);
+    Atomics.store(view, 5, this.id);
     this.call_base_func_util();
     this.wait_base_func_util();
     this.release_base_func_util();
@@ -249,7 +249,9 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     if (!this.invoke_fd_func(fd)) {
       return false;
     }
+    // console.log("call_fd_func", fd);
     this.wait_fd_func(fd);
+    // console.log("wait_fd_func", fd);
     // console.log("call_fd_func released", fd);
     return true;
   }
@@ -325,14 +327,20 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset, 9);
     Atomics.store(func_sig_view_u32, fd_func_sig_u32_offset + 1, fd);
 
+    // console.log("fd_close: ref", fd);
+
     if (!this.call_fd_func(fd)) {
       this.release_fd(fd);
       return wasi.ERRNO_BADF;
     }
 
+    // console.log("fd_close: ref2", fd);
+
     const error = this.get_error(fd);
 
     this.release_fd(fd);
+
+    // console.log("fd_close: ref3", fd);
 
     return error;
   }
@@ -768,7 +776,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     const buf = new Uint8Array(this.allocator.get_memory(buf_ptr, buf_len));
     // console.log("fd_read: ref: ", nread, new TextDecoder().decode(buf));
 
-    console.log("fd_read: nread", nread, new TextDecoder().decode(buf));
+    // console.log("fd_read: nread", nread, new TextDecoder().decode(buf));
 
     if (nread !== buf_len) {
       console.error("read nread !== buf_len");

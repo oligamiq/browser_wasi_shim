@@ -13,6 +13,11 @@ export class FdCloseSenderUseArrayBuffer extends ToRefSenderUseArrayBuffer imple
     targets: Array<number>,
     fd: number,
   ): Promise<void> {
+    if (targets === undefined || targets.length === 0) {
+      throw new Error("targets is empty");
+    }
+    // console.log("send", targets, fd);
+
     await this.async_send(targets, new Uint32Array([fd]));
   }
 
