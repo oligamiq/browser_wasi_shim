@@ -135,7 +135,7 @@ export class AllocatorUseArrayBuffer {
     }
     // console.log("num", Atomics.load(view, 1));
 
-    const memory_len = memory.byteLength;
+    const memory_len = this.share_arrays_memory.byteLength;
     const len = data.byteLength;
     const new_memory_len = share_arrays_memory_kept + len;
     if (memory_len < new_memory_len) {

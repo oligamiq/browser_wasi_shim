@@ -34,11 +34,15 @@ export abstract class WASIFarmRef {
     stdout: number | undefined,
     stderr: number | undefined,
     fd_close_receiver: FdCloseSender,
+    default_fds?: Array<number>,
   ) {
     this.stdin = stdin;
     this.stdout = stdout;
     this.stderr = stderr;
     this.fd_close_receiver = fd_close_receiver;
+    if (default_fds !== undefined) {
+      this.default_fds = default_fds;
+    }
   }
 
   get_stdin(): number | undefined {

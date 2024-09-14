@@ -1,5 +1,5 @@
-import { FdCloseSender } from "../sender";
-import { ToRefSenderUseArrayBuffer } from "./sender";
+import { FdCloseSender } from "../sender.js";
+import { ToRefSenderUseArrayBuffer } from "./sender.js";
 
 export class FdCloseSenderUseArrayBuffer extends ToRefSenderUseArrayBuffer implements FdCloseSender {
   constructor(

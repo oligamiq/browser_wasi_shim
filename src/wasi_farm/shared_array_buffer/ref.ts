@@ -24,13 +24,14 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     stdin: number | undefined,
     stdout: number | undefined,
     stderr: number | undefined,
+    default_fds: Array<number>,
   ) {
     if (fd_close_receiver instanceof FdCloseSenderUseArrayBuffer) {
-      super(stdin, stdout, stderr, fd_close_receiver);
+      super(stdin, stdout, stderr, fd_close_receiver, default_fds);
     } else {
       super(stdin, stdout, stderr, FdCloseSenderUseArrayBuffer.init_self(
         fd_close_receiver as FdCloseSenderUseArrayBuffer
-      ));
+      ), default_fds);
     }
     if (allocator instanceof AllocatorUseArrayBuffer === false) {
       this.allocator = AllocatorUseArrayBuffer.init_self(allocator);
@@ -66,6 +67,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
       sl.stdin,
       sl.stdout,
       sl.stderr,
+      sl.default_fds,
     );
   }
 
@@ -119,7 +121,9 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     this.lock_base_func_util();
     const view = new Int32Array(this.base_func_util);
     Atomics.store(view, 2, 0);
-    this.allocator.block_write(new Uint32Array(fds), this.base_func_util, 3);
+    const fds_array = new Uint32Array(fds);
+    console.log("fds_array", fds_array);
+    this.allocator.block_write(fds_array, this.base_func_util, 3);
     Atomics.store(view, 4, this.id);
     this.call_base_func_util();
     this.wait_base_func_util();

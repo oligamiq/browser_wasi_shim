@@ -125,6 +125,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
       this.stdin,
       this.stdout,
       this.stderr,
+      this.default_allow_fds,
     );
   }
 

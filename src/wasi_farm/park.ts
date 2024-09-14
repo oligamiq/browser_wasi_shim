@@ -13,7 +13,7 @@ export abstract class WASIFarmPark {
   protected stdin: number | undefined;
   protected stdout: number | undefined;
   protected stderr: number | undefined;
-  protected default_allow_fds: Array<number> = [];
+  protected default_allow_fds: Array<number>;
 
   constructor(
     fds: Array<Fd>,
