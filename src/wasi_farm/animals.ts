@@ -203,6 +203,8 @@ export class WASIFarmAnimal {
 
     this.mapping_fds(this.wasi_farm_refs, override_fd_maps);
 
+    console.log("this.fd_map", this.fd_map);
+
     this.args = args;
     this.env = env;
     const self = this;
@@ -216,10 +218,11 @@ export class WASIFarmAnimal {
           buf_size += arg.length + 1;
         }
         buffer.setUint32(argv_buf_size, buf_size, true);
-        debug.log(
-          buffer.getUint32(argc, true),
-          buffer.getUint32(argv_buf_size, true),
-        );
+        // debug.log(
+        //   buffer.getUint32(argc, true),
+        //   buffer.getUint32(argv_buf_size, true),
+        // );
+        debug.log("read args_sizes_get: len", self.args.length);
         return 0;
       },
       args_get(argv: number, argv_buf: number): number {
@@ -235,13 +238,14 @@ export class WASIFarmAnimal {
           buffer.setUint8(argv_buf + arg.length, 0);
           argv_buf += arg.length + 1;
         }
-        if (debug.enabled) {
+        // if (debug.enabled) {
           debug.log(
+            "read args_get: args",
             new TextDecoder("utf-8").decode(
               buffer8.slice(orig_argv_buf, argv_buf),
             ),
           );
-        }
+        // }
         return 0;
       },
       environ_sizes_get(environ_count: number, environ_size: number): number {
@@ -253,10 +257,11 @@ export class WASIFarmAnimal {
           buf_size += environ.length + 1;
         }
         buffer.setUint32(environ_size, buf_size, true);
-        debug.log(
-          buffer.getUint32(environ_count, true),
-          buffer.getUint32(environ_size, true),
-        );
+        // debug.log(
+        //   buffer.getUint32(environ_count, true),
+        //   buffer.getUint32(environ_size, true),
+        // );
+        debug.log("read environ_sizes_get: len", self.env.length);
         return 0;
       },
       environ_get(environ: number, environ_buf: number): number {
@@ -272,13 +277,14 @@ export class WASIFarmAnimal {
           buffer.setUint8(environ_buf + e.length, 0);
           environ_buf += e.length + 1;
         }
-        if (debug.enabled) {
+        // if (debug.enabled) {
           debug.log(
+            "read environ_get: environ",
             new TextDecoder("utf-8").decode(
               buffer8.slice(orig_environ_buf, environ_buf),
             ),
           );
-        }
+        // }
         return 0;
       },
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -651,7 +657,7 @@ export class WASIFarmAnimal {
           nwritten += iovec.buf_len;
         }
 
-        // console.log("fd_write", fd, new TextDecoder().decode(data));
+        // console.log("fd_write: ", fd, new TextDecoder().decode(data));
 
         const [written, ret] = wasi_farm_ref.fd_write(mapped_fd, data);
 

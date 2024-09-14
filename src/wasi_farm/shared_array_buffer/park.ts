@@ -6,6 +6,7 @@ import { WASIFarmPark } from "../park.js";
 import { WASIFarmRefUseArrayBuffer } from "./ref.js";
 import { FdCloseSender } from "../sender.js";
 import { FdCloseSenderUseArrayBuffer } from "./fd_close_sender.js";
+import { get_func_name_from_number } from "./util.js";
 
 export const fd_func_sig_size: number = 18;
 
@@ -287,7 +288,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
 
         const func_number = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset);
 
-        // console.log("called: func: ", get_func_name_from_number(func_number), "fd: ", fd_n);
+        console.log("called: func: ", get_func_name_from_number(func_number), "fd: ", fd_n);
 
         switcher: switch (func_number) {
           // fd_advise: (fd: u32) => errno;
@@ -814,6 +815,8 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
         if (this.fds[fd_n] === undefined) {
           break;
         }
+
+        console.log("called end: func: ", get_func_name_from_number(func_number), "fd: ", fd_n);
       } catch (e) {
         console.error(e);
 
