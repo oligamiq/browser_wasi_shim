@@ -128,14 +128,20 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     );
   }
 
-  notify_set_fd(fd: number) {
+  async notify_set_fd(fd: number) {
     if (this.fds[fd] == undefined) {
       throw new Error("fd is not defined");
     }
     if (fd >= 128) {
       throw new Error("fd is too big. expand is not supported yet");
     }
-    this.listen_fds.push(this.listen_fd(fd));
+    if (this.listen_fds[fd] !== undefined) {
+      if (this.listen_fds[fd] instanceof Promise) {
+        console.warn("fd is already set yet");
+        await this.listen_fds[fd];
+      }
+    }
+    this.listen_fds[fd] = this.listen_fd(fd);
 
     const view = new Int32Array(this.fds_len_and_num);
     Atomics.exchange(view, 0, this.fds.length);
@@ -143,12 +149,8 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
 
   async notify_rm_fd(fd: number) {
     (async () => {
-      const handle = this.listen_fds[fd];
-      if (handle === undefined) {
-        return;
-      }
+      await this.listen_fds[fd];
       this.listen_fds[fd] = undefined;
-      await handle;
     })()
 
     // console.log("notify_rm_fd", fd);
@@ -156,6 +158,14 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     // console.log("fds_map", this.fds_map);
 
     await this.fd_close_receiver.send(this.fds_map[fd], fd);
+  }
+
+  can_set_new_fd(fd: number): [boolean, Promise<void> | undefined] {
+    if (this.listen_fds[fd] instanceof Promise) {
+      return [false, this.listen_fds[fd]];
+    } else {
+      return [true, undefined];
+    }
   }
 
   /// listener
@@ -217,7 +227,14 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
         if (old_call_lock !== 1) {
           throw new Error("Lock is already set");
         }
-        Atomics.notify(lock_view, 1, 1);
+        const num = Atomics.notify(lock_view, 1, 1);
+        if (num !== 1) {
+          if (num === 0) {
+            console.warn("notify failed, waiter is late");
+            continue;
+          }
+          throw new Error("notify failed: " + num);
+        }
       } catch (e) {
         console.error("error", e);
         Atomics.store(lock_view, 1, 0);

@@ -140,17 +140,21 @@ export abstract class ToRefSenderUseArrayBuffer {
     id: number,
   ): Array<Uint32Array> | undefined {
     const view = new Int32Array(this.share_arrays_memory);
-    const data_num = Atomics.load(view, 1);
-    if (data_num === 0) {
+    const data_num_tmp = Atomics.load(view, 1);
+    if (data_num_tmp === 0) {
       return undefined;
     }
 
     this.block_lock();
 
+    const data_num = Atomics.load(view, 1);
+
     const return_data: Array<Uint32Array> = [];
 
     let offset = 12;
+    // console.log("data_num", data_num);
     for (let i = 0; i < data_num; i++) {
+      // console.log("this.share_arrays_memory", this.share_arrays_memory);
       const header = new Int32Array(this.share_arrays_memory, offset);
       const target_num = header[1];
       const targets = new Int32Array(this.share_arrays_memory, offset + 8, target_num);
@@ -171,16 +175,18 @@ export abstract class ToRefSenderUseArrayBuffer {
           const next_tail = new Int32Array(this.share_arrays_memory, next_data_offset);
           const now_tail = new Int32Array(this.share_arrays_memory, offset);
           now_tail.set(next_tail);
+          // console.log("new_used_len", new_used_len);
         } else {
           offset += data_len + 8 + target_num * 4;
         }
       } else {
         offset += data_len + 8 + target_num * 4;
       }
+      // console.log("offset", offset);
     }
 
     if (offset !== Atomics.load(view, 2)) {
-      throw new Error("invalid offset");
+      throw new Error("invalid offset: " + offset + " !== " + Atomics.load(view, 2));
     }
 
     this.release_lock();

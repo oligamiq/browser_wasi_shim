@@ -8,6 +8,7 @@ export abstract class WASIFarmPark {
   abstract listen(): void;
   abstract notify_set_fd(fd: number): void;
   abstract notify_rm_fd(fd: number): void;
+  abstract can_set_new_fd(fd: number): [boolean, Promise<void> | undefined];
 
   protected fds: Array<Fd>;
   protected stdin: number | undefined;
@@ -39,8 +40,8 @@ export abstract class WASIFarmPark {
   // it will be strange,
   // but the programmer should have written it
   // so that this does not happen in the first place.
-  private async get_new_fd(): Promise<[() => void, number]> {
-    const promise = new Promise<[() => void, number]>((resolve) => {
+  private async get_new_fd(): Promise<[() => Promise<void>, number]> {
+    const promise = new Promise<[() => Promise<void>, number]>((resolve) => {
       const len = this.get_new_fd_lock.push(async () => {
         let ret = -1;
         for (let i = 0; i < this.fds.length; i++) {
@@ -55,15 +56,21 @@ export abstract class WASIFarmPark {
           // this.fds.push(undefined);
           // console.log("push_fd", this.fds.length)
         }
+
+        const [can, promise] = this.can_set_new_fd(ret);
+        if (!can) {
+          await promise;
+        }
+
         // If it's assigned, it's resolved.
-        resolve([() => {
+        resolve([async () => {
           this.get_new_fd_lock.shift();
           const fn = this.get_new_fd_lock[0];
           if (fn != undefined) {
             fn();
           }
           // assigned and notify
-          this.notify_set_fd(ret);
+          await this.notify_set_fd(ret);
         }, ret]);
       });
       if (len == 1) {
@@ -433,9 +440,11 @@ export abstract class WASIFarmPark {
 
       const [resolve, opened_fd] = await this.get_new_fd();
 
+      console.log("path_open: park: ", path, "opened_fd" ,opened_fd);
+
       this.fds[opened_fd] = fd_obj;
 
-      resolve();
+      await resolve();
 
       // console.log("path_open: park: len: ", len);
 
