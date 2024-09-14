@@ -9,7 +9,6 @@ import { get_func_name_from_number } from "./util.js";
 export const fd_func_sig_size: number = 18;
 
 export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
-  // This is Proxy
   private allocator: Allocator;
 
   // args, envは変更されないので、コピーで良い
@@ -76,7 +75,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
   // Alignが面倒なので、u32 * 16 + 4にする
   // つまり1個のサイズは68byte
 
-  private fds_len: SharedArrayBuffer;
+  private fds_len_and_num: SharedArrayBuffer;
 
   private listen_fds: Array<Promise<void>> = [];
 
@@ -91,7 +90,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     const max_fds_len = 128;
     this.lock_fds = new SharedArrayBuffer(4 * max_fds_len * 3);
     this.fd_func_sig = new SharedArrayBuffer(fd_func_sig_size * 4 * max_fds_len);
-    this.fds_len = new SharedArrayBuffer(4);
+    this.fds_len_and_num = new SharedArrayBuffer(8);
   }
 
   /// これをpostMessageで送る
@@ -104,7 +103,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
       this.allocator,
       this.lock_fds,
       this.fd_func_sig,
-      this.fds_len,
+      this.fds_len_and_num,
       stdin,
       stdout,
       stderr,
@@ -122,8 +121,8 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     }
     this.listen_fds.push(this.listen_fd(fd));
 
-    const view = new Int32Array(this.fds_len);
-    Atomics.add(view, 0, 1);
+    const view = new Int32Array(this.fds_len_and_num);
+    Atomics.exchange(view, 0, this.fds.length);
   }
 
   async notify_rm_fd(fd: number) {

@@ -6,13 +6,15 @@ import * as wasi from "../../wasi_defs.js";
 export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
   allocator: Allocator;
   lock_fds: SharedArrayBuffer;
-  fds_len: SharedArrayBuffer;
+  // byte 1: fds_len
+  // byte 2: all wasi_farm_ref
+  fds_len_and_num: SharedArrayBuffer;
   fd_func_sig: SharedArrayBuffer;
 
   constructor(
     allocator: Allocator,
     lock_fds: SharedArrayBuffer,
-    fds_len: SharedArrayBuffer,
+    fds_len_and_num: SharedArrayBuffer,
     fd_func_sig: SharedArrayBuffer,
     stdin?: number,
     stdout?: number,
@@ -26,7 +28,10 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     }
     this.lock_fds = lock_fds;
     this.fd_func_sig = fd_func_sig;
-    this.fds_len = fds_len;
+    this.fds_len_and_num = fds_len_and_num;
+
+    const view = new Int32Array(this.fds_len_and_num);
+    Atomics.store(view, 0, 0);
   }
 
   get_ref(): WASIFarmRef {
@@ -34,7 +39,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
   }
 
   get_fds_len(): number {
-    const view = new Int32Array(this.fds_len);
+    const view = new Int32Array(this.fds_len_and_num);
     return Atomics.load(view, 0);
   }
 
@@ -43,11 +48,18 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
       sl.allocator,
       sl.lock_fds,
       sl.fd_func_sig,
-      sl.fds_len,
+      sl.fds_len_and_num,
       sl.stdin,
       sl.stdout,
       sl.stderr,
     );
+  }
+
+  set_id(): number {
+    const view = new Int32Array(this.fds_len_and_num);
+    const id = Atomics.add(view, 1, 1);
+    this.id = id;
+    return id;
   }
 
   private lock_fd(fd: number) {
@@ -139,7 +151,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     const n = Atomics.notify(view, fd * 3 + 1);
     if (n !== 1) {
       if (n === 0) {
-        const len_view = new Int32Array(this.fds_len);
+        const len_view = new Int32Array(this.fds_len_and_num);
         const len = Atomics.load(len_view, 0);
         if (len <= fd) {
           const lock = Atomics.exchange(view, fd * 3 + 1, 0);

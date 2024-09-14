@@ -10,6 +10,10 @@ export abstract class WASIFarmRef {
   protected stdout: number | undefined;
   protected stderr: number | undefined;
 
+  protected id: number;
+
+  abstract set_id(): number;
+
   constructor(
     stdin: number | undefined,
     stdout: number | undefined,

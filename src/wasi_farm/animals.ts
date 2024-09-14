@@ -10,6 +10,8 @@ export class WASIFarmAnimal {
 
   private wasi_farm_refs: WASIFarmRef[];
 
+  private id_in_wasi_farm_ref: Array<number>;
+
   private inst: { exports: { memory: WebAssembly.Memory } };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   wasiImport: { [key: string]: (...args: Array<any>) => unknown };
@@ -125,26 +127,30 @@ export class WASIFarmAnimal {
     debug.enable(options.debug);
 
     if (Array.isArray(wasi_farm_refs)) {
-        this.wasi_farm_refs = [wasi_farm_refs as unknown as WASIFarmRef];
+      this.wasi_farm_refs = [wasi_farm_refs as unknown as WASIFarmRef];
     } else {
-        this.wasi_farm_refs = wasi_farm_refs as unknown as Array<WASIFarmRef>;
+      this.wasi_farm_refs = wasi_farm_refs as unknown as Array<WASIFarmRef>;
     }
 
     try {
-        new SharedArrayBuffer(4);
-        this.can_array_buffer = true;
+      new SharedArrayBuffer(4);
+      this.can_array_buffer = true;
     } catch (_) {
-        this.can_array_buffer = false;
+      this.can_array_buffer = false;
     }
 
+    this.id_in_wasi_farm_ref = [];
     for (let i = 0; i < this.wasi_farm_refs.length; i++) {
-        if (!(this.wasi_farm_refs[i] instanceof WASIFarmRef)) {
-            if (this.can_array_buffer) {
-                this.wasi_farm_refs[i] = WASIFarmRefUseArrayBuffer.init_self(wasi_farm_refs[i] as WASIFarmRefUseArrayBuffer);
-            } else {
-                throw new Error("Non SharedArrayBuffer is not supported yet");
-            }
+      if (!(this.wasi_farm_refs[i] instanceof WASIFarmRef)) {
+        if (this.can_array_buffer) {
+            this.wasi_farm_refs[i] = WASIFarmRefUseArrayBuffer.init_self(wasi_farm_refs[i] as WASIFarmRefUseArrayBuffer);
+        } else {
+            throw new Error("Non SharedArrayBuffer is not supported yet");
         }
+      }
+      this.id_in_wasi_farm_ref.push(
+        this.wasi_farm_refs[i].set_id(),
+      )
     }
 
     this.mapping_fds(this.wasi_farm_refs);

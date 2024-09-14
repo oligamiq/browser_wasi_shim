@@ -1,4 +1,6 @@
-export abstract class ToRefSenderUseArrayBuffer {
+import { ToRefSender } from "../sender";
+
+export abstract class ToRefSenderUseArrayBuffer extends ToRefSender {
   // 構造としては、allocatorに近いが、仕組みが違う
 
   // fd管理の例
@@ -34,6 +36,8 @@ export abstract class ToRefSenderUseArrayBuffer {
     max_share_arrays_memory: number = 100 * 1024,
     share_arrays_memory?: SharedArrayBuffer,
   ) {
+    super();
+
     this.data_size = data_size;
     if (share_arrays_memory) {
       this.share_arrays_memory = share_arrays_memory;
