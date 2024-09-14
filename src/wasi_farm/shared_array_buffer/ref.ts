@@ -228,6 +228,9 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
           }
           Atomics.notify(view, fd * 3 + 1, 1);
           return false;
+        } else {
+          console.warn("invoke_func_loop is late");
+          return true;
         }
       }
       console.error("invoke_fd_func notify failed:", n);

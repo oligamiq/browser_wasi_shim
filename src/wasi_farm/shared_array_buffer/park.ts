@@ -790,7 +790,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
           if (n === 0) {
             console.warn("notify number is 0. ref is late?");
           } else {
-            throw new Error("notify number is not 1: " + n);
+            console.warn("notify number is not 1: " + n);
           }
         }
 
