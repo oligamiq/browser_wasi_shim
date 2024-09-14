@@ -29,18 +29,22 @@ export class WASIFarmAnimal {
   protected get_fd_and_wasi_ref(fd: number): [number | undefined, WASIFarmRef | undefined] {
     const mapped_fd_and_wasi_ref_n = this.fd_map[fd];
     if (!mapped_fd_and_wasi_ref_n) {
+      console.log("fd", fd, "is not found");
       return [undefined, undefined];
     }
     const [mapped_fd, wasi_ref_n] = mapped_fd_and_wasi_ref_n;
+    console.log("fd", fd, "is found", "mapped_fd", mapped_fd, "wasi_ref_n", wasi_ref_n);
     return [mapped_fd, this.wasi_farm_refs[wasi_ref_n]];
   }
 
   protected get_fd_and_wasi_ref_n(fd: number): [number | undefined, number | undefined] {
     const mapped_fd_and_wasi_ref_n = this.fd_map[fd];
     if (!mapped_fd_and_wasi_ref_n) {
+      console.log("fd", fd, "is not found");
       return [undefined, undefined];
     }
     const [mapped_fd, wasi_ref_n] = mapped_fd_and_wasi_ref_n;
+    console.log("fd", fd, "is found", "mapped_fd", mapped_fd, "wasi_ref_n", wasi_ref_n);
     return [mapped_fd, wasi_ref_n];
   }
 
@@ -76,9 +80,11 @@ export class WASIFarmAnimal {
     wasi_farm_refs: Array<WASIFarmRef>,
     override_fd_maps?: Array<number[]>,
   ) {
-    this.fd_map = [];
+    this.fd_map = [undefined, undefined, undefined];
     // console.log("wasi_farm_refs", wasi_farm_refs);
     for (let i = 0; i < wasi_farm_refs.length; i++) {
+      // console.log("fd_map", [...this.fd_map]);
+
       const wasi_farm_ref = wasi_farm_refs[i];
       // console.log("override_fd_map", wasi_farm_ref.default_fds);
       const override_fd_map = override_fd_maps ? override_fd_maps[i] : wasi_farm_ref.default_fds;
@@ -108,6 +114,8 @@ export class WASIFarmAnimal {
         this.map_new_fd(j, i);
       }
       wasi_farm_ref.set_park_fds_map(override_fd_map);
+
+      // console.log("fd_map", this.fd_map);
     }
     if (this.fd_map[0] === undefined) {
       throw new Error("stdin is not found");
@@ -200,6 +208,8 @@ export class WASIFarmAnimal {
         this.wasi_farm_refs[i].set_id(),
       )
     }
+
+    console.log("this.wasi_farm_refs", this.wasi_farm_refs);
 
     this.mapping_fds(this.wasi_farm_refs, override_fd_maps);
 
@@ -496,8 +506,11 @@ export class WASIFarmAnimal {
         if (mapped_fd === undefined || wasi_farm_ref === undefined) {
           return [undefined, wasi.ERRNO_BADF];
         }
+        console.log("fd_prestat_dir_name: fd", mapped_fd, "path_len", path_len);
         const [path, ret] = wasi_farm_ref.fd_prestat_dir_name(mapped_fd, path_len);
         if (path) {
+          console.log("fd_prestat_dir_name", new TextDecoder().decode(path));
+          console.log("fd_prestat_dir_name", path);
           const buffer8 = new Uint8Array(self.inst.exports.memory.buffer);
           buffer8.set(path, path_ptr);
         }

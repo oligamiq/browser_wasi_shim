@@ -459,13 +459,13 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
           // fd_prestat_dir_name: (fd: u32, path_len: u32) => [path_ptr: pointer, path_len: u32, errno];
           case 19: {
             const fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
-            const path_len = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
+            const path_len = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 2);
 
             const [ prestat_dir_name, ret ] = this.fd_prestat_dir_name(fd, path_len);
 
-            // console.log("fd_prestat_dir_name", new TextDecoder().decode(prestat_dir_name), ret);
+            console.log("fd_prestat_dir_name: park: ", prestat_dir_name);
 
-            if (prestat_dir_name && ret === wasi.ERRNO_SUCCESS) {
+            if (prestat_dir_name && (ret === wasi.ERRNO_SUCCESS || ret === wasi.ERRNO_NAMETOOLONG)) {
               await this.allocator.async_write(prestat_dir_name, this.fd_func_sig, fd_func_sig_i32_offset);
             }
             set_error(ret);

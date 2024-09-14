@@ -8,7 +8,7 @@ let wasi_farm;
     undefined,
     undefined,
     [
-      new PreopenDirectory("/hello2", [
+      new PreopenDirectory("hello2", [
         ["hello2.txt", new File(new TextEncoder().encode("Hello, world!!!!!"))],
       ]),
     ],

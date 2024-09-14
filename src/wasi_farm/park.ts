@@ -213,14 +213,23 @@ export abstract class WASIFarmPark {
       if (prestat) {
         const prestat_dir_name = prestat.inner.pr_name;
 
-        if (prestat_dir_name.length < path_len) {
+        console.log("fd_prestat_dir_name: park: inner: ", prestat_dir_name);
+        console.log("fd_prestat_dir_name: park: inner: ", new TextDecoder().decode(prestat_dir_name));
+
+        // console.log("fd_prestat_dir_name: park: path_len: ", path_len);
+
+        if (prestat_dir_name.length <= path_len) {
+          console.log("fd_prestat_dir_name: park: A");
           return [prestat_dir_name, ret];
         }
 
+        console.log("fd_prestat_dir_name: park: B");
         return [prestat_dir_name.slice(0, path_len), wasi.ERRNO_NAMETOOLONG];
       }
+      console.log("fd_prestat_dir_name: park: C");
       return [undefined, ret];
     }
+    console.log("fd_prestat_dir_name: park: D");
     return [undefined, wasi.ERRNO_BADF];
   }
 
