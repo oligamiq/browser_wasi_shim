@@ -43,8 +43,10 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     this.base_func_util = base_func_util;
     this.fds_len_and_num = fds_len_and_num;
 
-    const view = new Int32Array(this.fds_len_and_num);
-    Atomics.store(view, 0, 0);
+    // console.log("fds_len_and_num", this.fds_len_and_num);
+
+    // const view = new Int32Array(this.fds_len_and_num);
+    // Atomics.store(view, 0, 0);
   }
 
   get_ref(): WASIFarmRef {
@@ -143,7 +145,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
           continue;
         }
       }
-      const old = Atomics.exchange(view, fd * 3, 1);
+      const old = Atomics.compareExchange(view, fd * 3, now_value, 1);
       if (old === 0) {
         // console.log("lock_fd success", fd);
         return;
@@ -219,15 +221,15 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     const n = Atomics.notify(view, fd * 3 + 1);
     if (n !== 1) {
       if (n === 0) {
-        const len_view = new Int32Array(this.fds_len_and_num);
-        const len = Atomics.load(len_view, 0);
+        const len = this.get_fds_len();
         if (len <= fd) {
           const lock = Atomics.exchange(view, fd * 3 + 1, 0);
           if (lock !== 1) {
             console.error("what happened?");
           }
           Atomics.notify(view, fd * 3 + 1, 1);
-          return false;
+          console.error("what happened?: len", len, "fd", fd);
+          return true;
         } else {
           console.warn("invoke_func_loop is late");
           return true;
@@ -966,12 +968,16 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     const [ptr, len] = this.allocator.block_write(write_data, this.fd_func_sig, fd_func_sig_u32_offset + 2);
 
     if (!this.call_fd_func(fd)) {
+      // console.log("fd_write: ref: error", "wasi.ERRNO_BADF");
+
       this.allocator.free(ptr, len);
       this.release_fd(fd);
       return [undefined, wasi.ERRNO_BADF];
     }
 
     const error = this.get_error(fd);
+
+    // console.log("fd_write: ref: error", this.get_error(fd));
 
     // console.log("fd_write: ref: error", error);
 

@@ -664,6 +664,7 @@ export class WASIFarmAnimal {
         if (mapped_fd === undefined || wasi_farm_ref === undefined) {
           return wasi.ERRNO_BADF;
         }
+
         // console.log("fd_write", fd, iovs_ptr, iovs_len, nwritten_ptr);
 
         const buffer = new DataView(self.inst.exports.memory.buffer);
@@ -686,7 +687,7 @@ export class WASIFarmAnimal {
 
         const [written, ret] = wasi_farm_ref.fd_write(mapped_fd, data);
 
-        // console.log("fd_write", fd, ret, written);
+        // console.log("fd_write end", fd, ret, written);
 
         if (written) {
           buffer.setUint32(nwritten_ptr, written, true);
