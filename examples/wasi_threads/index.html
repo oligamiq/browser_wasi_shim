@@ -17,7 +17,7 @@
     (async () => {
       const wasi_farm = new WASIFarm(
         new OpenFile(new File([])), // stdin
-        ConsoleStdout.lineBuffered(msg => console.log(`[WASI stdout] ${msg}`)),
+        ConsoleStdout.lineBuffered(msg => console.log(`[WASI stdout on main thread] ${msg}`)),
         ConsoleStdout.lineBuffered(msg => console.warn(`[WASI stderr] ${msg}`)),
         [
           new PreopenDirectory(".", [

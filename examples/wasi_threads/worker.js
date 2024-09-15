@@ -5,7 +5,7 @@ let wasi_farm;
 (async () => {
   wasi_farm = new WASIFarm(
     undefined,
-    undefined,
+    ConsoleStdout.lineBuffered(msg => console.log(`[WASI stdout on worker] ${msg}`)),
     undefined,
     [
       new PreopenDirectory("hello2", [

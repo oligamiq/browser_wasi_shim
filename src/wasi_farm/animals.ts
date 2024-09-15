@@ -92,18 +92,21 @@ export class WASIFarmAnimal {
       const stdin = wasi_farm_ref.get_stdin();
       const stdout = wasi_farm_ref.get_stdout();
       const stderr = wasi_farm_ref.get_stderr();
+      console.log("stdin", stdin, "stdout", stdout, "stderr", stderr);
       if (stdin !== undefined) {
         if (override_fd_map.includes(stdin)) {
           this.fd_map[0] = [stdin, i];
         }
       }
       if (stdout !== undefined) {
-        if (override_fd_map.includes(stdin)) {
+        console.log("stdout", stdout, i, "override_fd_map", override_fd_map);
+        if (override_fd_map.includes(stdout)) {
+          console.log("stdout defined");
           this.fd_map[1] = [stdout, i];
         }
       }
       if (stderr !== undefined) {
-        if (override_fd_map.includes(stdin)) {
+        if (override_fd_map.includes(stderr)) {
           this.fd_map[2] = [stderr, i];
         }
       }
