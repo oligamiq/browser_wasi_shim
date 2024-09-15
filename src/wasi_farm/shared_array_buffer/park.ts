@@ -150,8 +150,9 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     this.listen_fds[fd] = this.listen_fd(fd);
 
     const view = new Int32Array(this.fds_len_and_num);
-    const len = Atomics.store(view, 0, this.fds.length);
-    console.log("notify_set_fd: len: ", len);
+    Atomics.store(view, 0, this.fds.length);
+    // const len = Atomics.store(view, 0, this.fds.length);
+    // console.log("notify_set_fd: len: ", len);
   }
 
   async notify_rm_fd(fd: number) {
@@ -319,7 +320,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
 
         const func_number = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset);
 
-        console.log("called: func: ", get_func_name_from_number(func_number), "fd: ", fd_n);
+        // console.log("called: func: ", get_func_name_from_number(func_number), "fd: ", fd_n);
 
         switcher: switch (func_number) {
           // fd_advise: (fd: u32) => errno;
@@ -830,7 +831,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
           throw new Error("Call is already set: " + old_call_lock + "\nfunc: " + get_func_name_from_number(func_number) + "\nfd: " + fd_n);
         }
 
-        console.log("called end: func: ", get_func_name_from_number(func_number), "fd: ", fd_n);
+        // console.log("called end: func: ", get_func_name_from_number(func_number), "fd: ", fd_n);
 
         const n = Atomics.notify(lock_view, lock_offset + 1);
         if (n !== 1) {
