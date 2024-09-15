@@ -133,7 +133,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
   }
 
   private lock_fd(fd: number) {
-    // console.log("lock_fd start", fd);
+    console.log("lock_fd start", fd);
     const view = new Int32Array(this.lock_fds);
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -145,23 +145,23 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
           continue;
         }
       }
-      const old = Atomics.compareExchange(view, fd * 3, now_value, 1);
+      const old = Atomics.compareExchange(view, fd * 3, 0, 1);
       if (old === 0) {
-        // console.log("lock_fd success", fd);
+        console.log("lock_fd success", fd);
         return;
       }
     }
   }
 
   private release_fd(fd: number) {
-    // console.log("release_fd", fd);
+    console.log("release_fd", fd);
     const view = new Int32Array(this.lock_fds);
     Atomics.store(view, fd * 3, 0);
     Atomics.notify(view, fd * 3, 1);
   }
 
   private lock_double_fd(fd1: number, fd2: number) {
-    // console.log("lock_double_fd", fd1, fd2);
+    console.log("lock_double_fd", fd1, fd2);
     const view = new Int32Array(this.lock_fds);
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -199,7 +199,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
   }
 
   private release_double_fd(fd1: number, fd2: number) {
-    // console.log("release_double_fd", fd1, fd2);
+    console.log("release_double_fd", fd1, fd2);
     const view = new Int32Array(this.lock_fds);
     Atomics.store(view, fd1 * 3, 0);
     Atomics.notify(view, fd1 * 3, 1);
@@ -211,11 +211,11 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     if (fd === undefined) {
       return false;
     }
-    // console.log("invoke_fd_func", fd);
+    console.log("invoke_fd_func", fd);
     const view = new Int32Array(this.lock_fds);
     const old = Atomics.exchange(view, fd * 3 + 1, 1);
     if (old === 1) {
-      console.error("invoke_fd_func already invoked");
+      console.error("invoke_fd_func already invoked\n" + "fd: " + fd);
       return;
     }
     const n = Atomics.notify(view, fd * 3 + 1);

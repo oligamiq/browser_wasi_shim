@@ -33,7 +33,7 @@ export class WASIFarmAnimal {
       return [undefined, undefined];
     }
     const [mapped_fd, wasi_ref_n] = mapped_fd_and_wasi_ref_n;
-    // console.log("fd", fd, "is found", "mapped_fd", mapped_fd, "wasi_ref_n", wasi_ref_n);
+    console.log("fd", fd, "is found", "mapped_fd", mapped_fd, "wasi_ref_n", wasi_ref_n);
     return [mapped_fd, this.wasi_farm_refs[wasi_ref_n]];
   }
 
@@ -44,7 +44,7 @@ export class WASIFarmAnimal {
       return [undefined, undefined];
     }
     const [mapped_fd, wasi_ref_n] = mapped_fd_and_wasi_ref_n;
-    // console.log("fd", fd, "is found", "mapped_fd", mapped_fd, "wasi_ref_n", wasi_ref_n);
+    console.log("fd", fd, "is found", "mapped_fd", mapped_fd, "wasi_ref_n", wasi_ref_n);
     return [mapped_fd, wasi_ref_n];
   }
 
