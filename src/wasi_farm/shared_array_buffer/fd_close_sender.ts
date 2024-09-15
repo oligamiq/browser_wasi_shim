@@ -16,7 +16,7 @@ export class FdCloseSenderUseArrayBuffer extends ToRefSenderUseArrayBuffer imple
     if (targets === undefined || targets.length === 0) {
       throw new Error("targets is empty");
     }
-    // console.log("send", targets, fd);
+    console.log("fd_close_sender send", targets, fd);
 
     await this.async_send(targets, new Uint32Array([fd]));
   }
@@ -28,6 +28,8 @@ export class FdCloseSenderUseArrayBuffer extends ToRefSenderUseArrayBuffer imple
     if (data === undefined) {
       return undefined;
     }
+
+    console.log("fd_close_sender get", data);
 
     const array = [];
     for (const i of data) {

@@ -146,6 +146,8 @@ export class WASIFarmAnimal {
 
   private map_new_fd_and_notify(fd: number, wasi_ref_n: number): number {
     const n = this.map_new_fd(fd, wasi_ref_n);
+    // console.log("animals: fd", fd, "is mapped to", n);
+    // console.log("wasi_ref_n", wasi_ref_n);
     this.wasi_farm_refs[wasi_ref_n].set_park_fds_map([fd]);
     return n;
   }
@@ -162,14 +164,24 @@ export class WASIFarmAnimal {
       }
     }
 
-    for (let i = 0; i < rm_fds.length; i++) {
-      const fd_and_wasi_ref_n = this.fd_map[i];
-      if (fd_and_wasi_ref_n === undefined) {
-        continue;
+    if (rm_fds.length > 0) {
+      for (let i = 0; i < this.fd_map.length; i++) {
+        const fd_and_wasi_ref_n = this.fd_map[i];
+        if (fd_and_wasi_ref_n === undefined) {
+          continue;
+        }
+        const [fd, wasi_ref_n] = fd_and_wasi_ref_n;
+        for (const [rm_fd_fd, rm_fd_wasi_ref_n] of rm_fds) {
+          if (fd === rm_fd_fd && wasi_ref_n === rm_fd_wasi_ref_n) {
+            this.fd_map[i] = undefined;
+            // console.log("fd", i, "is removed");
+            break;
+          }
+        }
+        // console.log("fd_and_wasi_ref_n", fd_and_wasi_ref_n);
       }
-      if (rm_fds.includes(fd_and_wasi_ref_n)) {
-        this.fd_map[i] = undefined;
-      }
+      // console.log("rm_fds.length", rm_fds.length);
+      // console.log("rm_fds", rm_fds);
     }
   }
 

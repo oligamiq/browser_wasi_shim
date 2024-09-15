@@ -131,6 +131,8 @@ export abstract class ToRefSenderUseArrayBuffer {
     const data_view = new Uint32Array(this.share_arrays_memory, used_len + 8 + targets.length * 4);
     data_view.set(data);
 
+    console.log("async_send send", targets, data);
+
     Atomics.add(view, 1, 1);
 
     this.release_lock();
@@ -160,8 +162,12 @@ export abstract class ToRefSenderUseArrayBuffer {
       const targets = new Int32Array(this.share_arrays_memory, offset + 8, target_num);
       const data_len = this.data_size;
       if (targets.includes(id)) {
-        const data = new Uint32Array(this.share_arrays_memory, offset + 8 + target_num * 4, data_len);
-        return_data.push(data);
+        const data = new Uint32Array(this.share_arrays_memory, offset + 8 + target_num * 4, data_len / 4);
+
+        // なぜかわからないが、上では正常に動作せず、以下のようにすると動作する
+        // return_data.push(new Uint32Array(data));
+        return_data.push(new Uint32Array([...data]));
+
         const target_index = targets.indexOf(id);
         Atomics.store(targets, target_index, -1);
         const old_left_targets_num = Atomics.sub(header, 0, 1);
@@ -190,6 +196,8 @@ export abstract class ToRefSenderUseArrayBuffer {
     }
 
     this.release_lock();
+
+    console.log("get_data get: return_data", return_data);
 
     return return_data;
   }

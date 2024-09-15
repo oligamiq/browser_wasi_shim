@@ -29,6 +29,10 @@ export abstract class WASIFarmPark {
     this.stderr = stderr;
     this.default_allow_fds = default_allow_fds;
     this.fds_map = new Array(fds.length);
+    for (let i = 0; i < fds.length; i++) {
+      this.fds_map[i] = [];
+    }
+    console.log("first fds_map", this.fds_map);
   }
 
   private get_new_fd_lock = new Array<() => Promise<void>>();
@@ -53,7 +57,8 @@ export abstract class WASIFarmPark {
         if (ret == -1) {
           ret = this.fds.length;
           // console.log("push_fd", this.fds.length)
-          // this.fds.push(undefined);
+          this.fds.push(undefined);
+          this.fds_map.push([]);
           // console.log("push_fd", this.fds.length)
         }
 

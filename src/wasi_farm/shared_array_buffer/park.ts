@@ -90,7 +90,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
   private fd_close_receiver: FdCloseSender;
 
   constructor(
-    fds: Array<Fd> = [],
+    fds: Array<Fd>,
     stdin: number | undefined,
     stdout: number | undefined,
     stderr: number | undefined,
@@ -158,7 +158,14 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     // console.log("fds", this.fds);
     // console.log("fds_map", this.fds_map);
 
+    console.log("notify_rm_fd: fds_map", this.fds_map);
+    console.log("notify_rm_fd: fd", fd);
+
+    console.log("notify_rm_fd: fds_map[fd]", [...this.fds_map[fd]]);
+
     await this.fd_close_receiver.send(this.fds_map[fd], fd);
+
+    this.fds_map[fd] = [];
   }
 
   can_set_new_fd(fd: number): [boolean, Promise<void> | undefined] {
@@ -203,7 +210,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
         switcher: switch (func_number) {
           // set_fds_map: (fds_ptr: u32, fds_len: u32);
           case 0: {
-            // console.log("set_fds_map");
+            console.log("set_fds_map");
             const ptr = Atomics.load(lock_view, 3);
             const len = Atomics.load(lock_view, 4);
             // console.log("set_fds_map", ptr, len);
@@ -211,14 +218,24 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
             this.allocator.free(ptr, len);
             const wasi_farm_ref_id = Atomics.load(lock_view, 5);
 
-            // console.log("set_fds_map", data, wasi_farm_ref_id);
+            console.log("listen_base set_fds_map", data, "from", wasi_farm_ref_id);
+
+            console.log("listen_base fds_map", this.fds_map);
 
             for (let i = 0; i < len / 4; i++) {
-              if (this.fds_map[data[i]] === undefined) {
-                this.fds_map[data[i]] = [];
+              const fd = data[i];
+              if (this.fds_map[fd] === undefined) {
+                this.fds_map[fd] = [];
+                console.error("listen_base fd is not defined");
               }
-              this.fds_map[data[i]].push(wasi_farm_ref_id);
+              this.fds_map[fd].push(wasi_farm_ref_id);
+              console.log("this.fds_map", this.fds_map);
+              console.log("this.fds_map[fd]", this.fds_map[fd]);
+              console.log("this.fds_map[1]", this.fds_map[1]);
+              console.log("fd", fd, "wasi_farm_ref_id", wasi_farm_ref_id);
             }
+
+            console.log("listen_base fds_map", this.fds_map);
 
             break switcher;
           }
@@ -316,10 +333,6 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
             const fd = Atomics.load(func_sig_view_u32, fd_func_sig_u32_offset + 1);
 
             const error = await this.fd_close(fd);
-
-            if (error === wasi.ERRNO_SUCCESS) {
-              this.fds_map[fd] = [];
-            }
 
             // console.log("fd_close", fd, error);
 
