@@ -131,7 +131,7 @@ export abstract class ToRefSenderUseArrayBuffer {
     const data_view = new Uint32Array(this.share_arrays_memory, used_len + 8 + targets.length * 4);
     data_view.set(data);
 
-    console.log("async_send send", targets, data);
+    // console.log("async_send send", targets, data);
 
     Atomics.add(view, 1, 1);
 
@@ -197,7 +197,7 @@ export abstract class ToRefSenderUseArrayBuffer {
 
     this.release_lock();
 
-    console.log("get_data get: return_data", return_data);
+    // console.log("get_data get: return_data", return_data);
 
     return return_data;
   }

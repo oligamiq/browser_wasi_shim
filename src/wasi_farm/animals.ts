@@ -29,22 +29,22 @@ export class WASIFarmAnimal {
   protected get_fd_and_wasi_ref(fd: number): [number | undefined, WASIFarmRef | undefined] {
     const mapped_fd_and_wasi_ref_n = this.fd_map[fd];
     if (!mapped_fd_and_wasi_ref_n) {
-      console.log("fd", fd, "is not found");
+      // console.log("fd", fd, "is not found");
       return [undefined, undefined];
     }
     const [mapped_fd, wasi_ref_n] = mapped_fd_and_wasi_ref_n;
-    console.log("fd", fd, "is found", "mapped_fd", mapped_fd, "wasi_ref_n", wasi_ref_n);
+    // console.log("fd", fd, "is found", "mapped_fd", mapped_fd, "wasi_ref_n", wasi_ref_n);
     return [mapped_fd, this.wasi_farm_refs[wasi_ref_n]];
   }
 
   protected get_fd_and_wasi_ref_n(fd: number): [number | undefined, number | undefined] {
     const mapped_fd_and_wasi_ref_n = this.fd_map[fd];
     if (!mapped_fd_and_wasi_ref_n) {
-      console.log("fd", fd, "is not found");
+      // console.log("fd", fd, "is not found");
       return [undefined, undefined];
     }
     const [mapped_fd, wasi_ref_n] = mapped_fd_and_wasi_ref_n;
-    console.log("fd", fd, "is found", "mapped_fd", mapped_fd, "wasi_ref_n", wasi_ref_n);
+    // console.log("fd", fd, "is found", "mapped_fd", mapped_fd, "wasi_ref_n", wasi_ref_n);
     return [mapped_fd, wasi_ref_n];
   }
 
@@ -221,11 +221,11 @@ export class WASIFarmAnimal {
       )
     }
 
-    console.log("this.wasi_farm_refs", this.wasi_farm_refs);
+    // console.log("this.wasi_farm_refs", this.wasi_farm_refs);
 
     this.mapping_fds(this.wasi_farm_refs, override_fd_maps);
 
-    console.log("this.fd_map", this.fd_map);
+    // console.log("this.fd_map", this.fd_map);
 
     this.args = args;
     this.env = env;
@@ -518,11 +518,11 @@ export class WASIFarmAnimal {
         if (mapped_fd === undefined || wasi_farm_ref === undefined) {
           return [undefined, wasi.ERRNO_BADF];
         }
-        console.log("fd_prestat_dir_name: fd", mapped_fd, "path_len", path_len);
+        // console.log("fd_prestat_dir_name: fd", mapped_fd, "path_len", path_len);
         const [path, ret] = wasi_farm_ref.fd_prestat_dir_name(mapped_fd, path_len);
         if (path) {
-          console.log("fd_prestat_dir_name", new TextDecoder().decode(path));
-          console.log("fd_prestat_dir_name", path);
+          // console.log("fd_prestat_dir_name", new TextDecoder().decode(path));
+          // console.log("fd_prestat_dir_name", path);
           const buffer8 = new Uint8Array(self.inst.exports.memory.buffer);
           buffer8.set(path, path_ptr);
         }

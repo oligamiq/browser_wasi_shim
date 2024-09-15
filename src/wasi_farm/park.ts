@@ -32,7 +32,7 @@ export abstract class WASIFarmPark {
     for (let i = 0; i < fds.length; i++) {
       this.fds_map[i] = [];
     }
-    console.log("first fds_map", this.fds_map);
+    // console.log("first fds_map", this.fds_map);
   }
 
   private get_new_fd_lock = new Array<() => Promise<void>>();
@@ -218,23 +218,23 @@ export abstract class WASIFarmPark {
       if (prestat) {
         const prestat_dir_name = prestat.inner.pr_name;
 
-        console.log("fd_prestat_dir_name: park: inner: ", prestat_dir_name);
-        console.log("fd_prestat_dir_name: park: inner: ", new TextDecoder().decode(prestat_dir_name));
+        // console.log("fd_prestat_dir_name: park: inner: ", prestat_dir_name);
+        // console.log("fd_prestat_dir_name: park: inner: ", new TextDecoder().decode(prestat_dir_name));
 
         // console.log("fd_prestat_dir_name: park: path_len: ", path_len);
 
         if (prestat_dir_name.length <= path_len) {
-          console.log("fd_prestat_dir_name: park: A");
+          // console.log("fd_prestat_dir_name: park: A");
           return [prestat_dir_name, ret];
         }
 
-        console.log("fd_prestat_dir_name: park: B");
+        // console.log("fd_prestat_dir_name: park: B");
         return [prestat_dir_name.slice(0, path_len), wasi.ERRNO_NAMETOOLONG];
       }
-      console.log("fd_prestat_dir_name: park: C");
+      // console.log("fd_prestat_dir_name: park: C");
       return [undefined, ret];
     }
-    console.log("fd_prestat_dir_name: park: D");
+    // console.log("fd_prestat_dir_name: park: D");
     return [undefined, wasi.ERRNO_BADF];
   }
 
@@ -454,7 +454,7 @@ export abstract class WASIFarmPark {
 
       const [resolve, opened_fd] = await this.get_new_fd();
 
-      console.log("path_open: park: ", path, "opened_fd" ,opened_fd);
+      // console.log("path_open: park: ", path, "opened_fd" ,opened_fd);
 
       this.fds[opened_fd] = fd_obj;
 
