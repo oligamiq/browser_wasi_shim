@@ -14,6 +14,7 @@ export type WASIFarmRefUseArrayBufferObject = {
 
 // Transmittable objects to communicate with Park
 export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
+  // For more information on member variables, see . See /park.ts
   allocator: AllocatorUseArrayBuffer;
   lock_fds: SharedArrayBuffer;
   // byte 1: fds_len
@@ -45,10 +46,6 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
 
     // const view = new Int32Array(this.fds_len_and_num);
     // Atomics.store(view, 0, 0);
-  }
-
-  get_ref(): WASIFarmRef {
-    return this;
   }
 
   get_fds_len(): number {

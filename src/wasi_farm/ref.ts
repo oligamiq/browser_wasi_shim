@@ -10,7 +10,6 @@ export type WASIFarmRefObject = {
 }
 
 export abstract class WASIFarmRef {
-  abstract get_ref(): WASIFarmRef;
   abstract get_fds_len(): number;
   // please implement this method
   // abstract init_self(sl: WASIFarmRef): WASIFarmRef;
