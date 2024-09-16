@@ -110,6 +110,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     stderr: number | undefined,
     // wasi_farm_ref default allow fds
     default_allow_fds: Array<number>,
+    allocator_size?: number,
   ) {
     super(
       fds,
@@ -119,7 +120,11 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
       default_allow_fds,
     );
 
-    this.allocator = new AllocatorUseArrayBuffer();
+    if (allocator_size === undefined) {
+      this.allocator = new AllocatorUseArrayBuffer();
+    } else {
+      this.allocator = new AllocatorUseArrayBuffer(new SharedArrayBuffer(allocator_size));
+    }
     const max_fds_len = 128;
     this.lock_fds = new SharedArrayBuffer(4 * max_fds_len * 3);
     this.fd_func_sig = new SharedArrayBuffer(fd_func_sig_u32_size * 4 * max_fds_len);
@@ -846,7 +851,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
             break switcher;
           }
           default: {
-            throw new Error("Unknown function");
+            throw new Error("Unknown function number: " + func_number);
           }
         }
 
@@ -871,6 +876,9 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
         }
       } catch (e) {
         console.error(e);
+
+        // sleep 1000ms
+        await new Promise((resolve) => setTimeout(resolve, 1000));
 
         const lock_view = new Int32Array(this.lock_fds);
         Atomics.exchange(lock_view, 1, 0);

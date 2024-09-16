@@ -16,7 +16,9 @@ export class WASIFarm {
     stdout?: Fd,
     stderr?: Fd,
     fds: Array<Fd> = [],
-    options: Options = {},
+    options: Options & {
+      allocator_size?: number;
+    } = {},
   ) {
     debug.enable(options.debug);
 
@@ -59,6 +61,7 @@ export class WASIFarm {
         stdout_,
         stderr_,
         default_allow_fds,
+        options?.allocator_size,
       );
     } else {
       throw new Error("Non SharedArrayBuffer is not supported yet");
