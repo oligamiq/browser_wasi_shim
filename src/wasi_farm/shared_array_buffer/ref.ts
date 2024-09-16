@@ -68,6 +68,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     );
   }
 
+  // allocate a new id on wasi_farm_ref and return it
   set_id(): number {
     const view = new Int32Array(this.fds_len_and_num);
     const id = Atomics.add(view, 1, 1);
@@ -75,7 +76,8 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     return id;
   }
 
-  private lock_base_func_util(): void {
+  // lock base_func
+  private lock_base_func(): void {
     const view = new Int32Array(this.base_func_util);
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -91,7 +93,8 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     }
   }
 
-  private call_base_func_util(): void {
+  // call base_func
+  private call_base_func(): void {
     const view = new Int32Array(this.base_func_util);
     const old = Atomics.exchange(view, 1, 1);
     if (old !== 0) {
@@ -100,7 +103,8 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     Atomics.notify(view, 1, 1);
   }
 
-  private wait_base_func_util(): void {
+  // wait base_func
+  private wait_base_func(): void {
     const view = new Int32Array(this.base_func_util);
     const lock = Atomics.wait(view, 1, 1);
     if (lock === "timed-out") {
@@ -108,23 +112,25 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     }
   }
 
-  private release_base_func_util(): void {
+  // release base_func
+  private release_base_func(): void {
     const view = new Int32Array(this.base_func_util);
     Atomics.store(view, 0, 0);
     Atomics.notify(view, 0, 1);
   }
 
+  // set park_fds_map
   set_park_fds_map(fds: Array<number>): void {
-    this.lock_base_func_util();
+    this.lock_base_func();
     const view = new Int32Array(this.base_func_util);
     Atomics.store(view, 2, 0);
     const fds_array = new Uint32Array(fds);
     // console.log("fds_array", fds_array);
     this.allocator.block_write(fds_array, this.base_func_util, 3);
     Atomics.store(view, 5, this.id);
-    this.call_base_func_util();
-    this.wait_base_func_util();
-    this.release_base_func_util();
+    this.call_base_func();
+    this.wait_base_func();
+    this.release_base_func();
   }
 
   private lock_fd(fd: number) {
