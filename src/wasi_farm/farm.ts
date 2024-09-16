@@ -2,7 +2,7 @@ import { debug } from "../debug.js";
 import { Fd } from "../fd.js";
 import { Options } from "../wasi.js";
 import { WASIFarmPark } from "./park.js";
-import { WASIFarmRef, WASIFarmRefObject } from "./ref.js";
+import { WASIFarmRefObject } from "./ref.js";
 import { WASIFarmParkUseArrayBuffer } from "./shared_array_buffer/park.js";
 
 export class WASIFarm {
