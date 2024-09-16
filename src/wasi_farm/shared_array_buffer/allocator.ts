@@ -3,13 +3,13 @@
 import "../polyfill.js";
 
 export class AllocatorUseArrayBuffer {
-  // !Sizedを渡す
-  // 最初の4byteはロック用の値: i32
-  // 次の4byteは現在のarrayの数: m: i32
-  // 次の4byteはshare_arrays_memoryの使っている場所の長さ: n: i32
-  // busyでなくなれば直ぐに空になるはずなので、空になったときだけリセットする。
-  // 長くなりすぎても、ブラウザの仮想化により大丈夫なはず
-  // First-Fitよりもさらに簡素なアルゴリズムを使う
+  // Pass a !Sized type
+  // The first 4 bytes are for a lock value: i32
+  // The next 4 bytes are for the current number of arrays: m: i32
+  // The next 4 bytes are for the length of the occupied space in share_arrays_memory: n: i32
+  // Once it is no longer busy, it should become empty immediately, so reset only when it is empty.
+  // Even if it becomes too long, it should be fine due to the browser's virtualization.
+  // Using an algorithm even simpler than First-Fit
   // SharedArrayBuffer.grow is supported by all major browsers except Android WebView,
   // which does not support SharedArrayBuffer in the first place,
   // but es2024 and the type system does not support it,
@@ -20,18 +20,21 @@ export class AllocatorUseArrayBuffer {
   //   maxByteLength: 10 * 1024 * 1024,
   // });
 
-  // 100MB割り当てたとしても、ブラウザの仮想化により、実際には、使うとするまでメモリを使わないはず
+  // Even if 100MB is allocated, due to browser virtualization,
+  // the memory should not actually be used until it is needed.
   share_arrays_memory: SharedArrayBuffer;
 
-  // データを追加するときは、Atomics.waitで、最初の4byteが0になるまで待つ
-  // その後、Atomics.compareExchangeで、最初の4byteを1にする
-  // その後、Atomics.addで、次の4byteを1増やす
-  // 上の返り値が0ならば、*1
-  // 上の返り値が1ならば、Atomics.waitで、最初の4byteが0になるまで待つ
-  // *1: 2番目をAtomics.addで1増やす。返り値が0なら、リセットする。
-  // データを追加する。足りないときは延ばす。
-  // 解放するときは、Atomics.subで1減らすだけ。
+  // When adding data, use Atomics.wait to wait until the first 4 bytes become 0.
+  // After that, use Atomics.compareExchange to set the first 4 bytes to 1.
+  // Then, use Atomics.add to increment the next 4 bytes by 1.
+  // If the return value is 0, proceed to *1.
+  // If the return value is 1, use Atomics.wait to wait until the first 4 bytes become 0.
+  // *1: Increment the second by 1 using Atomics.add. If the return value is 0, reset it.
+  // Add the data. Extend if there is not enough space.
+  // To release, just decrement by 1 using Atomics.sub.
 
+  // Since postMessage makes the class an object,
+  // it must be able to receive and assign a SharedArrayBuffer.
   constructor(
     share_arrays_memory: SharedArrayBuffer = new SharedArrayBuffer(10 * 1024 * 1024),
   ) {
@@ -42,17 +45,20 @@ export class AllocatorUseArrayBuffer {
     Atomics.store(view, 2, 12);
   }
 
+  // Since postMessage converts classes to objects,
+  // it must be able to convert objects to classes.
   static init_self(
     sl: AllocatorUseArrayBuffer,
   ): AllocatorUseArrayBuffer {
     return new AllocatorUseArrayBuffer(sl.share_arrays_memory);
   }
 
+  // Writes without blocking threads when acquiring locks
   async async_write(
     data: Uint8Array | Uint32Array,
     memory: SharedArrayBuffer,
     // ptr, len
-    // I32Arrayのret_ptrを渡す
+    // Pass I32Array ret_ptr
     ret_ptr: number,
   ): Promise<void> {
     const view = new Int32Array(this.share_arrays_memory);
@@ -75,7 +81,7 @@ export class AllocatorUseArrayBuffer {
 
       this.write_inner(data, memory, ret_ptr);
 
-      // lockを解放する
+      // release lock
       Atomics.store(view, 0, 0);
       Atomics.notify(view, 0, 1);
 
@@ -83,6 +89,7 @@ export class AllocatorUseArrayBuffer {
     }
   }
 
+  // Blocking threads for writing when acquiring locks
   block_write(
     data: Uint8Array | Uint32Array,
     memory: SharedArrayBuffer,
@@ -103,7 +110,7 @@ export class AllocatorUseArrayBuffer {
 
       const ret = this.write_inner(data, memory, ret_ptr);
 
-      // lockを解放する
+      // release lock
       Atomics.store(view, 0, 0);
       Atomics.notify(view, 0, 1);
 
@@ -111,6 +118,7 @@ export class AllocatorUseArrayBuffer {
     }
   }
 
+  // Function to write after acquiring a lock
   write_inner(
     data: Uint8Array | Uint32Array,
     memory: SharedArrayBuffer,
@@ -122,12 +130,11 @@ export class AllocatorUseArrayBuffer {
     const view = new Int32Array(this.share_arrays_memory);
     const view8 = new Uint8Array(this.share_arrays_memory);
 
-    // lockを取得した
-    // メモリを使っているユーザが増えたことを示す
+    // Indicates more users using memory
     const old_num = Atomics.add(view, 1, 1);
     let share_arrays_memory_kept: number;
     if (old_num === 0) {
-      // ユーザがいなかったので、リセットする
+      // Reset because there were no users.
       // debug.log("reset allocator");
       share_arrays_memory_kept = Atomics.store(view, 2, 12);
     } else {
@@ -139,7 +146,7 @@ export class AllocatorUseArrayBuffer {
     const len = data.byteLength;
     const new_memory_len = share_arrays_memory_kept + len;
     if (memory_len < new_memory_len) {
-      // メモリを延ばす
+      // extend memory
       // support from es2024
       // this.share_arrays_memory.grow(new_memory_len);
       throw new Error("size is bigger than memory. \nTODO! fix memory limit. support big size another way.");
@@ -149,6 +156,7 @@ export class AllocatorUseArrayBuffer {
     if (data instanceof Uint8Array) {
       data8 = data;
     } else if (data instanceof Uint32Array) {
+      // data to uint8
       const tmp = new ArrayBuffer(data.byteLength);
       new Uint32Array(tmp).set(data);
       data8 = new Uint8Array(tmp);
@@ -166,6 +174,7 @@ export class AllocatorUseArrayBuffer {
     return [share_arrays_memory_kept, len];
   }
 
+  // free allocated memory
   free(
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     pointer: number,
@@ -177,6 +186,7 @@ export class AllocatorUseArrayBuffer {
     // console.log("allocator: free", pointer, len);
   }
 
+  // get memory from pointer and length
   get_memory(
     ptr: number,
     len: number,
@@ -187,6 +197,8 @@ export class AllocatorUseArrayBuffer {
     return data;
   }
 
+  // Write again to the memory before releasing
+  // Not used because the situation for using it does not exist.
   use_defined_memory(
     ptr: number,
     len: number,
