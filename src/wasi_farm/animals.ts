@@ -1,8 +1,8 @@
 import { debug } from "../debug.js";
 import { Options, WASIProcExit } from "../wasi.js";
-import { WASIFarmRef } from "./ref.js";
+import { WASIFarmRef, WASIFarmRefObject } from "./ref.js";
 import * as wasi from "../wasi_defs.js";
-import { WASIFarmRefUseArrayBuffer } from "./shared_array_buffer/ref.js";
+import { WASIFarmRefUseArrayBuffer, WASIFarmRefUseArrayBufferObject } from "./shared_array_buffer/ref.js";
 import { FdCloseSender } from "./sender.js";
 
 export class WASIFarmAnimal {
@@ -189,7 +189,7 @@ export class WASIFarmAnimal {
   }
 
   constructor(
-    wasi_farm_refs: WASIFarmRef[] | WASIFarmRef,
+    wasi_farm_refs: WASIFarmRefObject[] | WASIFarmRefObject,
     args: Array<string>,
     env: Array<string>,
     options: Options = {},
@@ -197,10 +197,11 @@ export class WASIFarmAnimal {
   ) {
     debug.enable(options.debug);
 
+    let wasi_farm_refs_tmp: WASIFarmRefObject[];
     if (Array.isArray(wasi_farm_refs)) {
-      this.wasi_farm_refs = wasi_farm_refs as unknown as Array<WASIFarmRef>;
+      wasi_farm_refs_tmp = wasi_farm_refs as unknown as Array<WASIFarmRefObject>;
     } else {
-      this.wasi_farm_refs = [wasi_farm_refs as unknown as WASIFarmRef];
+      wasi_farm_refs_tmp = [wasi_farm_refs as unknown as WASIFarmRefObject];
     }
 
     try {
@@ -211,13 +212,12 @@ export class WASIFarmAnimal {
     }
 
     this.id_in_wasi_farm_ref = [];
-    for (let i = 0; i < this.wasi_farm_refs.length; i++) {
-      if (!(this.wasi_farm_refs[i] instanceof WASIFarmRef)) {
-        if (this.can_array_buffer) {
-          this.wasi_farm_refs[i] = WASIFarmRefUseArrayBuffer.init_self(this.wasi_farm_refs[i] as WASIFarmRefUseArrayBuffer);
-        } else {
-          throw new Error("Non SharedArrayBuffer is not supported yet");
-        }
+    this.wasi_farm_refs = [];
+    for (let i = 0; i < wasi_farm_refs_tmp.length; i++) {
+      if (this.can_array_buffer) {
+        this.wasi_farm_refs.push(WASIFarmRefUseArrayBuffer.init_self(wasi_farm_refs_tmp[i] as WASIFarmRefUseArrayBufferObject));
+      } else {
+        throw new Error("Non SharedArrayBuffer is not supported yet");
       }
       this.id_in_wasi_farm_ref.push(
         this.wasi_farm_refs[i].set_id(),

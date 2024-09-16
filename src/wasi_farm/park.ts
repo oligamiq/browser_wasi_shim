@@ -1,10 +1,10 @@
 import { Fd } from "../fd.js";
-import { WASIFarmRef } from "./ref.js";
+import { WASIFarmRefObject } from "./ref.js";
 import * as wasi from "../wasi_defs.js";
 import { debug } from "../debug.js";
 
 export abstract class WASIFarmPark {
-  abstract get_ref(): WASIFarmRef;
+  abstract get_ref(): WASIFarmRefObject;
   abstract listen(): void;
   abstract notify_set_fd(fd: number): void;
   abstract notify_rm_fd(fd: number): void;

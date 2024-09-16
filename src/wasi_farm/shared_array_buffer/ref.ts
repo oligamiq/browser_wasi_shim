@@ -1,9 +1,16 @@
-import { WASIFarmRef } from "../ref.js";
-import { AllocatorUseArrayBuffer } from "./allocator.js";
+import { WASIFarmRef, WASIFarmRefObject } from "../ref.js";
+import { AllocatorUseArrayBuffer, AllocatorUseArrayBufferObject } from "./allocator.js";
 import { fd_func_sig_bytes, fd_func_sig_u32_size } from "./park.js";
 import * as wasi from "../../wasi_defs.js";
-import { FdCloseSender } from "../sender.js";
-import { FdCloseSenderUseArrayBuffer } from "./fd_close_sender.js";
+import { FdCloseSenderUseArrayBuffer, FdCloseSenderUseArrayBufferObject } from "./fd_close_sender.js";
+
+export type WASIFarmRefUseArrayBufferObject = {
+  allocator: AllocatorUseArrayBuffer;
+  lock_fds: SharedArrayBuffer;
+  fds_len_and_num: SharedArrayBuffer;
+  fd_func_sig: SharedArrayBuffer;
+  base_func_util: SharedArrayBuffer;
+} & WASIFarmRefObject;
 
 // Transmittable objects to communicate with Park
 export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
@@ -16,12 +23,12 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
   base_func_util: SharedArrayBuffer;
 
   constructor(
-    allocator: AllocatorUseArrayBuffer,
+    allocator: AllocatorUseArrayBufferObject,
     lock_fds: SharedArrayBuffer,
     fds_len_and_num: SharedArrayBuffer,
     fd_func_sig: SharedArrayBuffer,
     base_func_util: SharedArrayBuffer,
-    fd_close_receiver: FdCloseSender,
+    fd_close_receiver: FdCloseSenderUseArrayBufferObject,
     stdin: number | undefined,
     stdout: number | undefined,
     stderr: number | undefined,
@@ -30,9 +37,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     if (fd_close_receiver instanceof FdCloseSenderUseArrayBuffer) {
       super(stdin, stdout, stderr, fd_close_receiver, default_fds);
     } else {
-      super(stdin, stdout, stderr, FdCloseSenderUseArrayBuffer.init_self(
-        fd_close_receiver as FdCloseSenderUseArrayBuffer
-      ), default_fds);
+      super(stdin, stdout, stderr, FdCloseSenderUseArrayBuffer.init_self(fd_close_receiver), default_fds);
     }
     if (allocator instanceof AllocatorUseArrayBuffer === false) {
       this.allocator = AllocatorUseArrayBuffer.init_self(allocator);
@@ -59,14 +64,14 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     return Atomics.load(view, 0);
   }
 
-  static init_self(sl: WASIFarmRefUseArrayBuffer): WASIFarmRef {
+  static init_self(sl: WASIFarmRefUseArrayBufferObject): WASIFarmRef {
     return new WASIFarmRefUseArrayBuffer(
       sl.allocator,
       sl.lock_fds,
       sl.fds_len_and_num,
       sl.fd_func_sig,
       sl.base_func_util,
-      sl.fd_close_receiver,
+      sl.fd_close_receiver as unknown as FdCloseSenderUseArrayBufferObject,
       sl.stdin,
       sl.stdout,
       sl.stderr,

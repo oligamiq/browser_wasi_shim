@@ -1,6 +1,14 @@
 import * as wasi from "../wasi_defs.js";
 import { FdCloseSender } from "./sender.js";
 
+export type WASIFarmRefObject = {
+  stdin: number | undefined;
+  stdout: number | undefined;
+  stderr: number | undefined;
+  fd_close_receiver: FdCloseSender;
+  default_fds: Array<number>;
+}
+
 export abstract class WASIFarmRef {
   abstract get_ref(): WASIFarmRef;
   abstract get_fds_len(): number;

@@ -1,5 +1,10 @@
 import { FdCloseSender } from "../sender.js";
-import { ToRefSenderUseArrayBuffer } from "./sender.js";
+import { ToRefSenderUseArrayBuffer, ToRefSenderUseArrayBufferObject } from "./sender.js";
+
+export type FdCloseSenderUseArrayBufferObject = {
+  max_share_arrays_memory?: number;
+  share_arrays_memory?: SharedArrayBuffer;
+} & ToRefSenderUseArrayBufferObject;
 
 // Object to tell other processes,
 // such as child processes,
@@ -47,7 +52,7 @@ export class FdCloseSenderUseArrayBuffer extends ToRefSenderUseArrayBuffer imple
 
   // Initialize the class from object
   static init_self(
-    sl: FdCloseSenderUseArrayBuffer,
+    sl: FdCloseSenderUseArrayBufferObject,
   ): FdCloseSender {
     const sel = ToRefSenderUseArrayBuffer.init_self_inner(sl);
     return new FdCloseSenderUseArrayBuffer(

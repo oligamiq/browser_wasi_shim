@@ -1,9 +1,8 @@
 import { Fd } from "../../fd.js";
 import * as wasi from "../../wasi_defs.js";
 import { AllocatorUseArrayBuffer } from "./allocator.js";
-import { WASIFarmRef } from "../ref.js";
 import { WASIFarmPark } from "../park.js";
-import { WASIFarmRefUseArrayBuffer } from "./ref.js";
+import { WASIFarmRefUseArrayBufferObject } from "./ref.js";
 import { FdCloseSender } from "../sender.js";
 import { FdCloseSenderUseArrayBuffer } from "./fd_close_sender.js";
 import { get_func_name_from_number } from "./util.js";
@@ -135,19 +134,19 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
   }
 
   /// Send this return by postMessage.
-  get_ref(): WASIFarmRef {
-    return new WASIFarmRefUseArrayBuffer(
-      this.allocator,
-      this.lock_fds,
-      this.fds_len_and_num,
-      this.fd_func_sig,
-      this.base_func_util,
-      this.fd_close_receiver,
-      this.stdin,
-      this.stdout,
-      this.stderr,
-      this.default_allow_fds,
-    );
+  get_ref(): WASIFarmRefUseArrayBufferObject {
+    return {
+      allocator: this.allocator,
+      lock_fds: this.lock_fds,
+      fds_len_and_num: this.fds_len_and_num,
+      fd_func_sig: this.fd_func_sig,
+      base_func_util: this.base_func_util,
+      fd_close_receiver: this.fd_close_receiver,
+      stdin: this.stdin,
+      stdout: this.stdout,
+      stderr: this.stderr,
+      default_fds: this.default_allow_fds,
+    };
   }
 
   // abstract methods implementation

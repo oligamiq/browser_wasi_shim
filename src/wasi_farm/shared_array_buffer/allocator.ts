@@ -2,6 +2,10 @@
 // import { debug } from "../../debug.js";
 import "../polyfill.js";
 
+export type AllocatorUseArrayBufferObject = {
+  share_arrays_memory: SharedArrayBuffer;
+}
+
 export class AllocatorUseArrayBuffer {
   // Pass a !Sized type
   // The first 4 bytes are for a lock value: i32
@@ -48,7 +52,7 @@ export class AllocatorUseArrayBuffer {
   // Since postMessage converts classes to objects,
   // it must be able to convert objects to classes.
   static init_self(
-    sl: AllocatorUseArrayBuffer,
+    sl: AllocatorUseArrayBufferObject,
   ): AllocatorUseArrayBuffer {
     return new AllocatorUseArrayBuffer(sl.share_arrays_memory);
   }

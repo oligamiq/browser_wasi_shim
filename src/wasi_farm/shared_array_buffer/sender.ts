@@ -1,3 +1,8 @@
+export type ToRefSenderUseArrayBufferObject = {
+  data_size: number;
+  share_arrays_memory?: SharedArrayBuffer;
+}
+
 export abstract class ToRefSenderUseArrayBuffer {
   // 構造としては、allocatorに近いが、仕組みが違う
 
@@ -47,7 +52,7 @@ export abstract class ToRefSenderUseArrayBuffer {
   }
 
   protected static init_self_inner(
-    sl: ToRefSenderUseArrayBuffer,
+    sl: ToRefSenderUseArrayBufferObject,
   ): {
     data_size: number,
     max_share_arrays_memory: number,
