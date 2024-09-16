@@ -14,13 +14,13 @@ export const fd_func_sig_bytes: number = fd_func_sig_u32_size * 4;
 export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
   private allocator: AllocatorUseArrayBuffer;
 
-  // args, envは変更されないので、コピーで良い
-  // fdsに依存しない関数は飛ばす
-  // wasm32なので、pointerはu32
-  // errnoはu8
+  // args and env do not change, so copying them is fine.
+  // Functions that do not depend on fds are skipped.
+  // Since it is wasm32, the pointer is u32.
+  // errno is u8.
   // https://github.com/WebAssembly/WASI/blob/4feaf733e946c375b610cc5d39ea2e1a68046e62/legacy/preview1/docs.md
-  // 一つ目は関数シグネチャ、二つ目が存在する場合はParkにおいて通信しなければならないデータを表している。同じ場合は書いていない。
-  // ここから、fdへの直接のアクセス
+  // The first item is the function signature, and the second (if it exists) represents data that must be communicated in Park. If they are the same, it is not written.
+  // From here, direct access to fd begins.
   // fd_advise: (fd: u32, offset: u64, len: u64, advice: u8) => errno;
   //    (fd: u32) => errno;
   // fd_allocate: (fd: u32, offset: u64, len: u64) => errno;
@@ -71,30 +71,45 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
   // path_symlink: (old_path_ptr: pointer, old_path_len: u32, fd: u32, new_path_ptr: pointer, new_path_len: u32) => errno;
   // path_unlink_file: (fd: u32, path_ptr: pointer, path_len: u32) => errno;
 
-  // fdを使いたい際に、ロックする
-  // [lock, call_func]
+  // Lock when you want to use fd
+  // Array<[lock, call_func]>
   private lock_fds: SharedArrayBuffer;
-  // 一番大きなサイズはu32 * 16 + 1
-  // Alignが面倒なので、u32 * 16 + 4にする
-  // つまり1個のサイズは68byte
 
+  // 1 bytes: fds.length
+  // 1 bytes: wasi_farm_ref num(id)
+  // Actually, as long as it is working properly, fds.length is not used
   private fds_len_and_num: SharedArrayBuffer;
 
+  // listen promise keep
   private listen_fds: Array<Promise<void>> = [];
 
+  // The largest size is u32 * 18 + 1
+  // Alignment is troublesome, so make it u32 * 18 + 4
+  // In other words, one size is 76 bytes
   private fd_func_sig: SharedArrayBuffer;
 
+  // listen base handle keep
   private listen_base_handle: Promise<void>;
 
+  // listen base lock and call etc
   private base_func_util: SharedArrayBuffer;
 
+  // tell other processes that the file descriptor has been closed
   private fd_close_receiver: FdCloseSender;
 
+  // this is not send by postMessage,
+  // so it is not necessary to keep shared_array_buffer
+  // this class is not used by user,
+  // to avoid mistakes, all constructors are now required to be passed in.
   constructor(
     fds: Array<Fd>,
+    // stdin fd number
     stdin: number | undefined,
+    // stdout fd number
     stdout: number | undefined,
+    // stderr fd number
     stderr: number | undefined,
+    // wasi_farm_ref default allow fds
     default_allow_fds: Array<number>,
   ) {
     super(
@@ -119,7 +134,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     this.base_func_util = new SharedArrayBuffer(24);
   }
 
-  /// これをpostMessageで送る
+  /// Send this return by postMessage.
   get_ref(): WASIFarmRef {
     return new WASIFarmRefUseArrayBuffer(
       this.allocator,
@@ -135,6 +150,10 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     );
   }
 
+  // abstract methods implementation
+  // from fd set ex) path_open
+  // received and listen the fd
+  // and set fds.length
   async notify_set_fd(fd: number) {
     if (this.fds[fd] == undefined) {
       throw new Error("fd is not defined");
@@ -156,6 +175,8 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     // console.log("notify_set_fd: len: ", len);
   }
 
+  // abstract methods implementation
+  // called by fd close ex) fd_close
   async notify_rm_fd(fd: number) {
     (async () => {
       await this.listen_fds[fd];
@@ -176,6 +197,8 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     this.fds_map[fd] = [];
   }
 
+  // abstract methods implementation
+  // wait to close old listener
   can_set_new_fd(fd: number): [boolean, Promise<void> | undefined] {
     if (this.listen_fds[fd] instanceof Promise) {
       return [false, this.listen_fds[fd]];
@@ -184,7 +207,8 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     }
   }
 
-  /// listener
+  // listen all fds and base
+  // Must be called before was_ref_id is instantiated
   listen() {
     this.listen_fds = [];
     for (let n = 0; n < this.fds.length; n++) {
@@ -193,6 +217,11 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     this.listen_base_handle = this.listen_base();
   }
 
+  // listen base
+  // ex) set_fds_map
+  // if close fd and send to other process,
+  // it need targets wasi_farm_ref id
+  // so, set fds_map
   async listen_base() {
     const lock_view = new Int32Array(this.base_func_util);
     Atomics.store(lock_view, 0, 0);
@@ -269,7 +298,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     }
   }
 
-  // workerでインスタンス化するより先に呼び出す
+  // listen fd
   async listen_fd(fd_n: number) {
     const lock_view = new Int32Array(this.lock_fds, fd_n * 12);
     const bytes_offset = fd_n * fd_func_sig_bytes;
