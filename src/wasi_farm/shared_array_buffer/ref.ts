@@ -5,6 +5,7 @@ import * as wasi from "../../wasi_defs.js";
 import { FdCloseSender } from "../sender.js";
 import { FdCloseSenderUseArrayBuffer } from "./fd_close_sender.js";
 
+// Transmittable objects to communicate with Park
 export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
   allocator: AllocatorUseArrayBuffer;
   lock_fds: SharedArrayBuffer;
