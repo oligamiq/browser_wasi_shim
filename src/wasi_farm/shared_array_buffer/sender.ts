@@ -3,33 +3,35 @@ export type ToRefSenderUseArrayBufferObject = {
   share_arrays_memory?: SharedArrayBuffer;
 }
 
+// To ref sender abstract class
 export abstract class ToRefSenderUseArrayBuffer {
-  // 構造としては、allocatorに近いが、仕組みが違う
+  // The structure is similar to an allocator, but the mechanism is different
 
-  // fd管理の例
-  // これに対応しないといけない
-  // 1. path_openの開始
-  // 2. fd_closeによりなくなる
-  // 2.1 ToRefSenderで送られる
-  // 3. path_openによって再度割り当てられる
-  // < ToRefSenderでクローズ
-  // 3.1 開いた人が使えるようになる
-  // < ToRefSenderでクローズ こちらだけではバグる
-  // farmの構造的に起きないはず
+  // Example of fd management
+  // This needs to be handled
+  // 1. Start of path_open
+  // 2. Removed by fd_close
+  // 2.1 Sent by ToRefSender
+  // 3. Reassigned by path_open
+  // < Closed by ToRefSender
+  // 3.1 The person who opened it can use it
+  // < Closed by ToRefSender — this alone will cause a bug
+  // Structurally, this shouldn't happen in the farm
 
-  // 結局、この関数から受け取るときは、各関数の最初の呼び出し時に行えばいいはず
+  // In the end, when receiving from this function, it should be done on the first call of each function
 
-  // 最初の4byteはロック用の値: i32
-  // 次の4byteは現在のデータの数: m: i32
-  // 次の4byteはshare_arrays_memoryの使っている場所の長さ: n: i32
-  // データのヘッダ
-  // 4byte: 残りの対象の数
-  // 4byte: 対象の数 (n)
-  // n*4 byte: 対象の割り当て数値
-  // データ
-  // data_size byte: データ
+  // The first 4 bytes are for lock value: i32
+  // The next 4 bytes are the current number of data: m: i32
+  // The next 4 bytes are the length of the area used by share_arrays_memory: n: i32
+  // Data header
+  // 4 bytes: remaining target count
+  // 4 bytes: target count (n)
+  // n * 4 bytes: target allocation numbers
+  // Data
+  // data_size bytes: data
   private share_arrays_memory: SharedArrayBuffer;
 
+  // The size of the data
   private data_size: number;
 
   constructor(
