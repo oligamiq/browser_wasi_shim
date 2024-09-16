@@ -1,7 +1,11 @@
 import { FdCloseSender } from "../sender.js";
 import { ToRefSenderUseArrayBuffer } from "./sender.js";
 
+// Object to tell other processes,
+// such as child processes,
+// that the file descriptor has been closed
 export class FdCloseSenderUseArrayBuffer extends ToRefSenderUseArrayBuffer implements FdCloseSender {
+  // Should be able to change the size of memory as it accumulates more and more on memory
   constructor(
     max_share_arrays_memory?: number,
     share_arrays_memory?: SharedArrayBuffer,
@@ -9,6 +13,7 @@ export class FdCloseSenderUseArrayBuffer extends ToRefSenderUseArrayBuffer imple
     super(4, max_share_arrays_memory, share_arrays_memory);
   }
 
+  // Send the closed file descriptor to the target process
   async send(
     targets: Array<number>,
     fd: number,
@@ -21,6 +26,7 @@ export class FdCloseSenderUseArrayBuffer extends ToRefSenderUseArrayBuffer imple
     await this.async_send(targets, new Uint32Array([fd]));
   }
 
+  // Get the closed file descriptor from the target process
   get(
     id: number,
   ): Array<number> | undefined {
@@ -39,6 +45,7 @@ export class FdCloseSenderUseArrayBuffer extends ToRefSenderUseArrayBuffer imple
     return array;
   }
 
+  // Initialize the class from object
   static init_self(
     sl: FdCloseSenderUseArrayBuffer,
   ): FdCloseSender {
