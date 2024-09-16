@@ -1,9 +1,9 @@
-import { strace, WASIFarmAnimal } from "../dist/index.js";
+import { strace, WASIFarmAnimal } from "../../dist/index.js";
 
 console.log("worker.js");
 
 onmessage = async function (e) {
-  let wasm = await WebAssembly.compileStreaming(fetch("wasm-rustc/bin/rustc.wasm"));
+  let wasm = await WebAssembly.compileStreaming(fetch("../wasm-rustc/bin/rustc.wasm"));
 
   console.log("worker.js onmessage", e.data);
 

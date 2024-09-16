@@ -8,9 +8,9 @@ See https://github.com/bjorn3/browser_wasi_shim/pull/28 for instructions on how 
 <html>
 <head>
 <meta charset="utf-8">
-<link rel="stylesheet" href="node_modules/xterm/css/xterm.css" />
-<script src="node_modules/xterm/lib/xterm.js"></script>
-<script src="node_modules/xterm-addon-fit/lib/xterm-addon-fit.js"></script>
+<link rel="stylesheet" href="../node_modules/xterm/css/xterm.css" />
+<script src="../node_modules/xterm/lib/xterm.js"></script>
+<script src="../node_modules/xterm-addon-fit/lib/xterm-addon-fit.js"></script>
 <style>
     body {
         margin: 0;
@@ -29,7 +29,7 @@ See https://github.com/bjorn3/browser_wasi_shim/pull/28 for instructions on how 
   This demo highlights how far `rustc` can get on this polyfill before failing due to other reasons.
 </p>
 <script type="module">
-    import { Fd, File, Directory, PreopenDirectory, WASIFarm, strace, WASIFarmAnimal } from "../dist/index.js";
+    import { Fd, File, Directory, PreopenDirectory, WASIFarm, strace, WASIFarmAnimal } from "../../dist/index.js";
 
     var term = new Terminal({
         convertEol: true,
