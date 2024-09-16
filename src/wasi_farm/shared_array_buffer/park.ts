@@ -8,7 +8,8 @@ import { FdCloseSender } from "../sender.js";
 import { FdCloseSenderUseArrayBuffer } from "./fd_close_sender.js";
 import { get_func_name_from_number } from "./util.js";
 
-export const fd_func_sig_size: number = 18;
+export const fd_func_sig_u32_size: number = 18;
+export const fd_func_sig_bytes: number = fd_func_sig_u32_size * 4;
 
 export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
   private allocator: AllocatorUseArrayBuffer;
@@ -107,7 +108,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     this.allocator = new AllocatorUseArrayBuffer();
     const max_fds_len = 128;
     this.lock_fds = new SharedArrayBuffer(4 * max_fds_len * 3);
-    this.fd_func_sig = new SharedArrayBuffer(fd_func_sig_size * 4 * max_fds_len);
+    this.fd_func_sig = new SharedArrayBuffer(fd_func_sig_u32_size * 4 * max_fds_len);
     this.fds_len_and_num = new SharedArrayBuffer(8);
 
     const view = new Int32Array(this.fds_len_and_num);
@@ -276,12 +277,12 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     const func_sig_view_i32 = new Int32Array(this.fd_func_sig);
     const func_sig_view_u32 = new Int32Array(this.fd_func_sig);
     const func_sig_view_u64 = new BigUint64Array(this.fd_func_sig);
-    const fd_func_sig_u8_offset = fd_n * fd_func_sig_size * 4;
-    const fd_func_sig_u16_offset = fd_n * fd_func_sig_size * 2;
-    const fd_func_sig_i32_offset = fd_n * fd_func_sig_size;
-    const fd_func_sig_u32_offset = fd_n * fd_func_sig_size;
-    const fd_func_sig_u64_offset = fd_n * Math.round(fd_func_sig_size / 2)
-    const errno_offset = fd_func_sig_i32_offset + (fd_func_sig_size - 1);
+    const fd_func_sig_u8_offset = fd_n * fd_func_sig_u32_size * 4;
+    const fd_func_sig_u16_offset = fd_n * fd_func_sig_u32_size * 2;
+    const fd_func_sig_i32_offset = fd_n * fd_func_sig_u32_size;
+    const fd_func_sig_u32_offset = fd_n * fd_func_sig_u32_size;
+    const fd_func_sig_u64_offset = fd_n * Math.round(fd_func_sig_u32_size / 2)
+    const errno_offset = fd_func_sig_i32_offset + (fd_func_sig_u32_size - 1);
     const lock_offset = fd_n * 3;
     Atomics.store(lock_view, lock_offset, 0);
     Atomics.store(lock_view, lock_offset + 1, 0);
