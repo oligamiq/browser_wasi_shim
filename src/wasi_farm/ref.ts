@@ -80,7 +80,7 @@ export abstract class WASIFarmRef {
   abstract fd_pwrite(fd: number | undefined, iovs: Uint8Array, offset: bigint): [number | undefined, number];
   abstract fd_read(fd: number | undefined, iovs: Uint32Array): [[number, Uint8Array] | undefined, number];
   abstract fd_readdir(fd: number | undefined, limit_buf_len: number, cookie: bigint): [[Uint8Array, number] | undefined, number]
-  abstract fd_renumber(fd: number | undefined, to: number): number;
+  // abstract fd_renumber(fd: number | undefined, to: number): number;
   abstract fd_seek(fd: number | undefined, offset: bigint, whence: number): [bigint | undefined, number];
   abstract fd_sync(fd: number | undefined): number;
   abstract fd_tell(fd: number | undefined): [bigint, number];

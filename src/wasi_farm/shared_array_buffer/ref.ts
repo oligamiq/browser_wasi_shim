@@ -818,31 +818,31 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     return [[buf, buf_used], error];
   }
 
-  fd_renumber(
-    fd: number,
-    to: number,
-  ): number {
-    this.lock_double_fd(fd, to);
+  // fd_renumber(
+  //   fd: number,
+  //   to: number,
+  // ): number {
+  //   this.lock_double_fd(fd, to);
 
-    const bytes_offset = fd * fd_func_sig_bytes;
-    const func_sig_view_u32 = new Uint32Array(this.fd_func_sig, bytes_offset);
+  //   const bytes_offset = fd * fd_func_sig_bytes;
+  //   const func_sig_view_u32 = new Uint32Array(this.fd_func_sig, bytes_offset);
 
-    // fd
-    Atomics.store(func_sig_view_u32, 0, 23);
-    Atomics.store(func_sig_view_u32, 1, fd);
-    Atomics.store(func_sig_view_u32, 2, to);
+  //   // fd
+  //   Atomics.store(func_sig_view_u32, 0, 23);
+  //   Atomics.store(func_sig_view_u32, 1, fd);
+  //   Atomics.store(func_sig_view_u32, 2, to);
 
-    if (!this.call_fd_func(fd)) {
-      this.release_fd(fd);
-      return wasi.ERRNO_BADF;
-    }
+  //   if (!this.call_fd_func(fd)) {
+  //     this.release_fd(fd);
+  //     return wasi.ERRNO_BADF;
+  //   }
 
-    const error = this.get_error(fd);
+  //   const error = this.get_error(fd);
 
-    this.release_double_fd(fd, to);
+  //   this.release_double_fd(fd, to);
 
-    return error;
-  }
+  //   return error;
+  // }
 
   fd_seek(
     fd: number,

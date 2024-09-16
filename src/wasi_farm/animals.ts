@@ -155,6 +155,14 @@ export class WASIFarmAnimal {
     return n;
   }
 
+  private map_set_fd_and_notify(fd: number, wasi_ref_n: number, index: number) {
+    if (this.fd_map[index] !== undefined) {
+      throw new Error("fd is already mapped");
+    }
+    this.fd_map[index] = [fd, wasi_ref_n];
+    this.wasi_farm_refs[wasi_ref_n].set_park_fds_map([fd]);
+  }
+
   private check_fds() {
     const rm_fds: Array<[number, number]> = [];
     for (let i = 0; i < this.id_in_wasi_farm_ref.length; i++) {
@@ -612,18 +620,26 @@ export class WASIFarmAnimal {
         }
         return ret;
       },
-      // TODO! Make it work with different wasi_farm_ref
       fd_renumber(fd: number, to: number) {
         self.check_fds();
-        const [mapped_fd, wasi_farm_ref] = self.get_fd_and_wasi_ref(fd);
+
+        const [mapped_fd, wasi_farm_ref_n] = self.get_fd_and_wasi_ref_n(fd);
         const [mapped_to, wasi_farm_ref_to] = self.get_fd_and_wasi_ref(to);
-        if (mapped_fd === undefined || wasi_farm_ref === undefined || mapped_to === undefined || wasi_farm_ref_to === undefined) {
+
+        if (mapped_fd === undefined || wasi_farm_ref_n === undefined || mapped_to === undefined || wasi_farm_ref_to === undefined) {
           return wasi.ERRNO_BADF;
         }
-        if (wasi_farm_ref !== wasi_farm_ref_to) {
-          return wasi.ERRNO_BADF;
+
+        const ret = wasi_farm_ref_to.fd_close(mapped_to);
+        self.check_fds();
+
+        if (ret != wasi.ERRNO_SUCCESS) {
+          return ret;
         }
-        return wasi_farm_ref.fd_renumber(mapped_fd, mapped_to);
+
+        self.map_set_fd_and_notify(mapped_fd, wasi_farm_ref_n, to);
+
+        return wasi.ERRNO_SUCCESS;
       },
       fd_seek(fd: number, offset: bigint, whence: number, newoffset_ptr: number) {
         self.check_fds();

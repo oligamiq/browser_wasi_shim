@@ -336,20 +336,20 @@ export abstract class WASIFarmPark {
     }
   }
 
-  protected async fd_renumber(fd: number, to: number): Promise<number> {
-    if (this.fds[fd] != undefined) {
-      const ret = this.fds[fd].fd_close();
-      if (ret != wasi.ERRNO_SUCCESS) {
-        return ret;
-      }
-      this.fds[to] = this.fds[fd];
-      this.fds[fd] = undefined;
-      await this.notify_rm_fd(fd);
-      return wasi.ERRNO_SUCCESS;
-    } else {
-      return wasi.ERRNO_BADF;
-    }
-  }
+  // protected async fd_renumber(fd: number, to: number): Promise<number> {
+  //   if (this.fds[fd] != undefined) {
+  //     const ret = this.fds[to].fd_close();
+  //     if (ret != wasi.ERRNO_SUCCESS) {
+  //       return ret;
+  //     }
+  //     this.fds[to] = this.fds[fd];
+  //     this.fds[fd] = undefined;
+  //     await this.notify_rm_fd(fd);
+  //     return wasi.ERRNO_SUCCESS;
+  //   } else {
+  //     return wasi.ERRNO_BADF;
+  //   }
+  // }
 
   protected fd_seek(fd: number, offset: bigint, whence: number): [bigint | undefined, number] {
     if (this.fds[fd] != undefined) {
