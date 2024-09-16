@@ -34,16 +34,8 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     stderr: number | undefined,
     default_fds: Array<number>,
   ) {
-    if (fd_close_receiver instanceof FdCloseSenderUseArrayBuffer) {
-      super(stdin, stdout, stderr, fd_close_receiver, default_fds);
-    } else {
-      super(stdin, stdout, stderr, FdCloseSenderUseArrayBuffer.init_self(fd_close_receiver), default_fds);
-    }
-    if (allocator instanceof AllocatorUseArrayBuffer === false) {
-      this.allocator = AllocatorUseArrayBuffer.init_self(allocator);
-    } else {
-      this.allocator = allocator;
-    }
+    super(stdin, stdout, stderr, FdCloseSenderUseArrayBuffer.init_self(fd_close_receiver), default_fds);
+    this.allocator = AllocatorUseArrayBuffer.init_self(allocator);
     this.lock_fds = lock_fds;
     this.fd_func_sig = fd_func_sig;
     this.base_func_util = base_func_util;
