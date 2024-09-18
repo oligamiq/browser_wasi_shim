@@ -47,6 +47,10 @@ export class WASIFarm {
 
     this.fds = new_fds;
 
+    // WebAssembly.Memory can be used to create a SharedArrayBuffer, but it cannot be transferred by postMessage.
+    // Uncaught (in promise) DataCloneError:
+    //    Failed to execute 'postMessage' on 'Worker':
+    //    SharedArrayBuffer transfer requires self.crossOriginIsolated.
     try {
         new SharedArrayBuffer(4);
         this.can_array_buffer = true;
