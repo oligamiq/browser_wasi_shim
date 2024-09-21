@@ -4,6 +4,7 @@ import { WASIFarmRef, WASIFarmRefObject } from "./ref.js";
 import * as wasi from "../wasi_defs.js";
 import { WASIFarmRefUseArrayBuffer, WASIFarmRefUseArrayBufferObject } from "./shared_array_buffer/ref.js";
 import { FdCloseSender } from "./sender.js";
+import { ThreadSpawner } from "./shared_array_buffer/thread_spawn.js";
 
 export class WASIFarmAnimal {
   private args: Array<string>;
@@ -13,11 +14,19 @@ export class WASIFarmAnimal {
 
   private id_in_wasi_farm_ref: Array<number>;
 
-  private inst: { exports: { memory: WebAssembly.Memory } };
+  inst: { exports: { memory: WebAssembly.Memory } };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   wasiImport: { [key: string]: (...args: Array<any>) => unknown };
 
+  wasiThreadImport: {
+    "thread-spawn": (start_arg: number) => number;
+  };
+
   private can_array_buffer;
+
+  private can_thread_spawn: boolean;
+
+  private thread_spawner: ThreadSpawner;
 
   // Each process has a specific fd that it can access.
   // If it does not exist in the map, it cannot be accessed.
@@ -200,8 +209,12 @@ export class WASIFarmAnimal {
     wasi_farm_refs: WASIFarmRefObject[] | WASIFarmRefObject,
     args: Array<string>,
     env: Array<string>,
-    options: Options = {},
+    options: Options & {
+      can_thread_spawn?: boolean;
+      thread_spawn_worker_url?: string;
+    } = {},
     override_fd_maps?: Array<number[]>,
+    thread_spawner?: ThreadSpawner,
   ) {
     debug.enable(options.debug);
 
@@ -237,6 +250,24 @@ export class WASIFarmAnimal {
     this.mapping_fds(this.wasi_farm_refs, override_fd_maps);
 
     // console.log("this.fd_map", this.fd_map);
+
+    if (options.can_thread_spawn) {
+      this.can_thread_spawn = options.can_thread_spawn;
+
+      if (thread_spawner) {
+        if (!(thread_spawner instanceof ThreadSpawner)) {
+          throw new Error("thread_spawner is not ThreadSpawner");
+        }
+
+        this.thread_spawner = thread_spawner;
+      } else {
+        if (options.thread_spawn_worker_url === undefined) {
+          throw new Error("thread_spawn_worker_url is not defined");
+        }
+
+        this.thread_spawner = new ThreadSpawner(options.thread_spawn_worker_url, wasi_farm_refs_tmp);
+      }
+    }
 
     this.args = args;
     this.env = env;
@@ -902,6 +933,25 @@ export class WASIFarmAnimal {
         self.check_fds();
         throw "sockets not supported";
       },
+    };
+    this.wasiThreadImport = {
+      "thread-spawn": (
+        start_arg: number,
+      ) => {
+        self.check_fds();
+        if (!self.can_thread_spawn) {
+          throw new Error("thread_spawn is not allowed");
+        }
+
+        const thread_id = self.thread_spawner.thread_spawn(
+          start_arg,
+          self.args,
+          self.env,
+          self.fd_map,
+        );
+
+        return thread_id;
+      }
     }
   }
 }
