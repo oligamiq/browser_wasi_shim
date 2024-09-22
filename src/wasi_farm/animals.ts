@@ -28,6 +28,10 @@ export class WASIFarmAnimal {
 
   private thread_spawner: ThreadSpawner;
 
+  wait_worker_background_worker(): Promise<void> {
+    return this.thread_spawner.wait_worker_background_worker();
+  }
+
   // Each process has a specific fd that it can access.
   // If it does not exist in the map, it cannot be accessed.
   // child process can access parent process's fd.
@@ -75,6 +79,22 @@ export class WASIFarmAnimal {
     }
   }
 
+  wasi_thread_start(instance: {
+    exports: { memory: WebAssembly.Memory; wasi_thread_start: (thread_id: number, start_arg: number) => void };
+  }, thread_id: number, start_arg: number) {
+    this.inst = instance;
+    try {
+      instance.exports.wasi_thread_start(thread_id, start_arg);
+      return 0;
+    } catch (e) {
+      if (e instanceof WASIProcExit) {
+        return e.code;
+      } else {
+        throw e;
+      }
+    }
+  }
+
   /// Initialize a WASI reactor
   initialize(instance: {
     exports: { memory: WebAssembly.Memory; _initialize?: () => unknown };
@@ -90,6 +110,7 @@ export class WASIFarmAnimal {
     override_fd_maps?: Array<number[]>,
   ) {
     this.fd_map = [undefined, undefined, undefined];
+
     // console.log("wasi_farm_refs", wasi_farm_refs);
     for (let i = 0; i < wasi_farm_refs.length; i++) {
       // console.log("fd_map", [...this.fd_map]);
@@ -129,6 +150,7 @@ export class WASIFarmAnimal {
 
       // console.log("fd_map", this.fd_map);
     }
+
     if (this.fd_map[0] === undefined) {
       throw new Error("stdin is not found");
     }
@@ -203,6 +225,10 @@ export class WASIFarmAnimal {
       // console.log("rm_fds.length", rm_fds.length);
       // console.log("rm_fds", rm_fds);
     }
+  }
+
+  get_share_memory(): WebAssembly.Memory {
+    return this.thread_spawner.get_share_memory();
   }
 
   constructor(
@@ -934,6 +960,7 @@ export class WASIFarmAnimal {
         throw "sockets not supported";
       },
     };
+
     this.wasiThreadImport = {
       "thread-spawn": (
         start_arg: number,

@@ -17,6 +17,7 @@ export class WorkerBackgroundRef {
       worker_option: options,
       id,
     });
+    console.log("worker", id);
     return new WorkerRef(id);
   }
 }

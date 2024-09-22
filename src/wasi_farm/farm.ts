@@ -52,10 +52,15 @@ export class WASIFarm {
     //    Failed to execute 'postMessage' on 'Worker':
     //    SharedArrayBuffer transfer requires self.crossOriginIsolated.
     try {
-        new SharedArrayBuffer(4);
-        this.can_array_buffer = true;
-    } catch (_) {
-        this.can_array_buffer = false;
+      new SharedArrayBuffer(4);
+      this.can_array_buffer = true;
+    } catch (e) {
+      this.can_array_buffer = false;
+      console.warn("SharedArrayBuffer is not supported:", e);
+
+      if (!crossOriginIsolated) {
+        console.warn("SharedArrayBuffer is not supported because crossOriginIsolated is not enabled.");
+      }
     }
 
     if (this.can_array_buffer) {

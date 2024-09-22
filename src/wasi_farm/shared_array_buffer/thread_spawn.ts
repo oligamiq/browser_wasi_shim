@@ -14,14 +14,17 @@
 
 //  (import "wasi" "thread-spawn" (func $fimport$27 (param i32) (result i32)))
 
-import { WASIFarmAnimal } from "../animals";
-import { WASIFarmRefObject } from "../ref";
+import { WASIFarmAnimal } from "../animals.js";
+import { WASIFarmRefObject } from "../ref.js";
+import { WorkerBackgroundRef } from "../worker_background/worker_background_ref.js";
+import { url as worker_background_worker_url } from "../worker_background/worker_blob.js";
 
 type ThreadSpawnerObject = {
   thread_id_and_lock: SharedArrayBuffer;
   share_memory: WebAssembly.Memory;
   wasi_farm_refs_object: Array<WASIFarmRefObject>;
   worker_url: string;
+  worker_background_ref_id: string;
 };
 
 export class ThreadSpawner {
@@ -29,6 +32,12 @@ export class ThreadSpawner {
   private share_memory: WebAssembly.Memory;
   private wasi_farm_refs_object: Array<WASIFarmRefObject>;
   private worker_url: string;
+  private worker_background_ref: WorkerBackgroundRef;
+  private worker_background_ref_id: string;
+
+  // hold the worker to prevent GC.
+  private worker_background_worker?: Worker;
+  private worker_background_worker_promise?: Promise<void>;
 
   // https://github.com/rustwasm/wasm-pack/issues/479
 
@@ -40,11 +49,12 @@ export class ThreadSpawner {
     // 16MB for the time being.
     // https://users.rust-lang.org/t/what-is-the-size-limit-of-threads-stack-in-rust/11867/3
     MIN_STACK: number = 16777216,
+    worker_background_ref_id?: string,
   ) {
     if (thread_id_and_lock) {
       this.thread_id_and_lock = thread_id_and_lock;
     } else {
-      this.thread_id_and_lock = new SharedArrayBuffer(4);
+      this.thread_id_and_lock = new SharedArrayBuffer(8);
       const thread_id_and_lock_view = new Uint32Array(this.thread_id_and_lock);
       Atomics.store(thread_id_and_lock_view, 0, 1);
     }
@@ -62,6 +72,28 @@ export class ThreadSpawner {
     this.share_memory = share_memory ||
     // WebAssembly.Memory's 1 page is 65536 bytes.
       new WebAssembly.Memory({ initial: initial_size, maximum: max_memory, shared: true });
+
+    if (worker_background_ref_id === undefined) {
+      this.worker_background_worker = new Worker(worker_background_worker_url, { type: "module" });
+      const { promise, resolve } = Promise.withResolvers<void>();
+      this.worker_background_worker_promise = promise;
+      this.worker_background_worker.onmessage = (e) => {
+        this.worker_background_ref_id = e.data;
+        this.worker_background_ref = new WorkerBackgroundRef(this.worker_background_ref_id);
+        resolve();
+      }
+    } else {
+      this.worker_background_ref_id = worker_background_ref_id;
+      this.worker_background_ref = new WorkerBackgroundRef(this.worker_background_ref_id);
+    }
+  }
+
+  wait_worker_background_worker(): Promise<void> {
+    if (this.worker_background_worker_promise) {
+      return this.worker_background_worker_promise;
+    } else {
+      return Promise.resolve();
+    }
   }
 
   lock(): void {
@@ -92,7 +124,7 @@ export class ThreadSpawner {
 
   wait_release(): void {
     const lock_view = new Int32Array(this.thread_id_and_lock, 4);
-    const ret = Atomics.wait(lock_view, 0, 0);
+    const ret = Atomics.wait(lock_view, 0, 1);
     if (ret === "timed-out") {
       throw new Error("wait_release timed-out");
     }
@@ -105,6 +137,9 @@ export class ThreadSpawner {
     fd_map: Array<[number, number]>,
   ): number {
     this.lock();
+
+    console.log("thread_spawn", this.thread_id_and_lock);
+
     const thread_id_and_lock_view = new Uint32Array(this.thread_id_and_lock);
     const thread_id = Atomics.add(thread_id_and_lock_view, 0, 1);
     const sl_object: ThreadSpawnerObject = {
@@ -112,19 +147,52 @@ export class ThreadSpawner {
       share_memory: this.share_memory,
       wasi_farm_refs_object: this.wasi_farm_refs_object,
       worker_url: this.worker_url,
+      worker_background_ref_id: this.worker_background_ref_id,
     };
-    const worker = new Worker(this.worker_url, { type: "module" });
-    worker.postMessage({
-      this_is_thread_spawn: true,
-      thread_id,
-      start_arg,
-      sl_object,
-      args,
-      env,
-      fd_map,
-    });
 
-    this.wait_release();
+    console.log("WorkerLocation", self.location);
+
+    console.log("self.Worker", self.Worker);
+
+    console.log("self.Worker.toString()", self.Worker.toString());
+
+    if (!(self.Worker.toString().includes("[native code]"))) {
+      if (self.Worker.toString().includes("function")) {
+        console.warn("SubWorker(new Worker on Worker) is polyfilled maybe.");
+      } else {
+        throw new Error("SubWorker(new Worker on Worker) is not supported.");
+      }
+    }
+
+    // const worker = new Worker("./thread_spawn.js", { type: "module" });
+    // const url = new URL("./thread_spawn.js", self.location.href);
+    const url = new URL("/examples/wasi_multi_threads/thread_spawn.js", import.meta.url);
+    // const worker = new Worker(url, { type: "module" });
+
+    const worker = this.worker_background_ref.worker(url.href, { type: "module" });
+
+    console.log("url", url.href);
+
+    console.log("worker:url", this.worker_url);
+    console.log("worker", worker);
+
+    worker.onmessage = (e) => {
+      console.log("worker.onmessage", e);
+
+      worker.postMessage({
+        this_is_thread_spawn: true,
+        thread_id,
+        start_arg,
+        sl_object,
+        args,
+        env,
+        fd_map,
+      });
+    }
+
+    console.log("thread_spawn", thread_id);
+
+    // this.wait_release();
 
     return thread_id;
   }
@@ -132,9 +200,13 @@ export class ThreadSpawner {
   static init_self(
     sl: ThreadSpawnerObject,
   ): ThreadSpawner {
-    const thread_spawner = new ThreadSpawner(sl.worker_url, sl.wasi_farm_refs_object, sl.thread_id_and_lock, sl.share_memory);
+    const thread_spawner = new ThreadSpawner(sl.worker_url, sl.wasi_farm_refs_object, sl.thread_id_and_lock, sl.share_memory, undefined, sl.worker_background_ref_id);
     thread_spawner.wasi_farm_refs_object = sl.wasi_farm_refs_object;
     return thread_spawner;
+  }
+
+  get_share_memory(): WebAssembly.Memory {
+    return this.share_memory;
   }
 }
 
@@ -152,6 +224,8 @@ export const thread_spawn_on_worker = (
   }
 ): WASIFarmAnimal => {
   if (msg.this_is_thread_spawn) {
+    console.log("thread_spawn_on_worker", msg.thread_id);
+
     const sl_object = msg.sl_object;
     const thread_spawner = ThreadSpawner.init_self(msg.sl_object);
     const { thread_id, start_arg, args, env } = msg;
@@ -177,7 +251,13 @@ export const thread_spawn_on_worker = (
       thread_spawner,
     );
 
-    (wasi_animal.inst.exports as unknown as { wasi_thread_start: (thread_id_and_lock: number, start_arg: number) => void }).wasi_thread_start(thread_id, start_arg);
+    // let inst = await WebAssembly.instantiate(wasm, {
+    //   "env": {
+    //     memory: wasi.get_share_memory(),
+    //   },
+    //   "wasi": strace(wasi.wasiThreadImport, ["thread-spawn"]),
+    //   "wasi_snapshot_preview1": strace(w.wasiImport, ["fd_prestat_get"]),
+    // });
 
     thread_spawner.release();
 
