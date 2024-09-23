@@ -238,6 +238,7 @@ export class WASIFarmAnimal {
     options: Options & {
       can_thread_spawn?: boolean;
       thread_spawn_worker_url?: string;
+      thread_spawn_wasm?: WebAssembly.Module;
     } = {},
     override_fd_maps?: Array<number[]>,
     thread_spawner?: ThreadSpawner,
@@ -286,8 +287,11 @@ export class WASIFarmAnimal {
         if (options.thread_spawn_worker_url === undefined) {
           throw new Error("thread_spawn_worker_url is not defined");
         }
+        if (options.thread_spawn_wasm === undefined) {
+          throw new Error("thread_spawn_wasm is not defined");
+        }
 
-        this.thread_spawner = new ThreadSpawner(options.thread_spawn_worker_url, wasi_farm_refs_tmp);
+        this.thread_spawner = new ThreadSpawner(options.thread_spawn_worker_url, wasi_farm_refs_tmp, undefined, undefined, undefined, options.thread_spawn_wasm);
       }
     }
 

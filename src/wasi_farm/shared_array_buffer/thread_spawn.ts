@@ -48,6 +48,7 @@ export class ThreadSpawner {
     // https://users.rust-lang.org/t/what-is-the-size-limit-of-threads-stack-in-rust/11867/3
     MIN_STACK: number = 16777216,
     worker_background_ref_object?: WorkerBackgroundRefObject,
+    thread_spawn_wasm?: WebAssembly.Module,
   ) {
     this.worker_url = worker_url;
     this.wasi_farm_refs_object = wasi_farm_refs_object;
@@ -76,6 +77,7 @@ export class ThreadSpawner {
       }
       this.worker_background_worker.postMessage({ override_object: {
         sl_object: this.get_object(),
+        thread_spawn_wasm,
       } });
     } else {
       this.worker_background_ref_object = worker_background_ref_object;
@@ -156,22 +158,23 @@ export class ThreadSpawner {
 
 // send fd_map is not implemented yet.
 // issue: the fd passed to the child process is different from the parent process.
-export const thread_spawn_on_worker = (
+export const thread_spawn_on_worker = async (
   msg: {
     this_is_thread_spawn: boolean;
     worker_id: number;
     start_arg: number;
     worker_background_ref: WorkerBackgroundRefObject;
     sl_object: ThreadSpawnerObject;
+    thread_spawn_wasm: WebAssembly.Module;
     args: Array<string>;
     env: Array<string>;
     fd_map: Array<number []>;
   }
-): WASIFarmAnimal => {
+): Promise<WASIFarmAnimal> => {
   console.log("msg", msg);
   if (msg.this_is_thread_spawn) {
 
-    const { worker_id: thread_id, start_arg, args, env, sl_object } = msg;
+    const { worker_id: thread_id, start_arg, args, env, sl_object, thread_spawn_wasm } = msg;
     console.log("thread_spawn_on_worker", thread_id);
 
     const thread_spawner = ThreadSpawner.init_self_with_worker_background_ref(sl_object, msg.worker_background_ref);
@@ -185,7 +188,7 @@ export const thread_spawn_on_worker = (
       override_fd_map[wasi_ref_n].push(fd);
     }
 
-    const wasi_animal = new WASIFarmAnimal(
+    const wasi = new WASIFarmAnimal(
       sl_object.wasi_farm_refs_object,
       args,
       env,
@@ -197,18 +200,25 @@ export const thread_spawn_on_worker = (
       thread_spawner,
     );
 
-    // let inst = await WebAssembly.instantiate(wasm, {
-    //   "env": {
-    //     memory: wasi.get_share_memory(),
-    //   },
-    //   "wasi": strace(wasi.wasiThreadImport, ["thread-spawn"]),
-    //   "wasi_snapshot_preview1": strace(w.wasiImport, ["fd_prestat_get"]),
-    // });
+    const inst = await WebAssembly.instantiate(thread_spawn_wasm, {
+      "env": {
+        memory: wasi.get_share_memory(),
+      },
+      "wasi": wasi.wasiThreadImport,
+      "wasi_snapshot_preview1": wasi.wasiImport,
+    });
 
     globalThis.postMessage({
       msg: "ready"
     });
 
-    return wasi_animal;
+    wasi.wasi_thread_start(inst as {
+      exports: {
+        memory: WebAssembly.Memory;
+        wasi_thread_start: (thread_id: number, start_arg: number) => void;
+      };
+    }, thread_id, start_arg);
+
+    return wasi;
   }
 }
