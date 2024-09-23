@@ -9,6 +9,11 @@ const { code } = await swc.minify(
   {
     compress: {
       reduce_funcs: true,
+      arguments: true,
+      booleans_as_integers: true,
+      hoist_funs: false,
+      keep_classnames: false,
+      unsafe: true,
     },
     mangle: true,
   }
