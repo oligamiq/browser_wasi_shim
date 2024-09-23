@@ -20,7 +20,7 @@ writeFileSync("./dist/workers/worker_background_worker_minify.js", code, "utf8")
 
 const wrapper_code = `
 export const url = () => {
-  const code = '${code.replace(/\\n/g, "\\\\n")}';
+  const code = '${code.replace(/\\/g, "\\\\")}';
 
   const blob = new Blob([code], { type: "application/javascript" });
 

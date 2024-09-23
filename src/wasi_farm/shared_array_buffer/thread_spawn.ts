@@ -205,6 +205,10 @@ export const thread_spawn_on_worker = (
     //   "wasi_snapshot_preview1": strace(w.wasiImport, ["fd_prestat_get"]),
     // });
 
+    globalThis.postMessage({
+      msg: "ready"
+    });
+
     return wasi_animal;
   }
 }

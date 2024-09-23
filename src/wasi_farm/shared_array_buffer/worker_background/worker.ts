@@ -111,6 +111,7 @@ class WorkerBackground<T> {
               const { msg } = e.data;
 
               if (msg === "ready") {
+                console.log("worker ready");
                 resolve();
               }
 
