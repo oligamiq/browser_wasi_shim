@@ -70,7 +70,6 @@ export class WorkerBackgroundRef {
     Atomics.store(view, 3, options.type === "module" ? 1 : 0);
     const obj_json = JSON.stringify(post_obj);
     const obj_buffer = new TextEncoder().encode(obj_json);
-    console.log("obj_json", obj_json);
     this.allocator.block_write(obj_buffer, this.signature_input, 4);
     this.call_base_func();
     this.wait_base_func();

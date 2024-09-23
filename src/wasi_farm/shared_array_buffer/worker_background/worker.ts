@@ -4,8 +4,6 @@
 // Therefore, a dedicated worker that creates a subworker (worker in worker) is prepared.
 // The request is made using BroadcastChannel.
 
-console.log("worker_background_worker");
-
 import { AllocatorUseArrayBuffer, AllocatorUseArrayBufferObject } from "../allocator.js";
 
 // Note that postMessage, etc.
@@ -111,13 +109,14 @@ class WorkerBackground<T> {
               const { msg } = e.data;
 
               if (msg === "ready") {
-                console.log("worker ready");
                 resolve();
               }
 
               if (msg === "done") {
                 this.workers[worker_id].terminate();
                 this.workers[worker_id] = undefined;
+
+                console.log(`worker ${worker_id} done so terminate`);
               }
             }
 
@@ -155,12 +154,12 @@ class WorkerBackground<T> {
   }
 }
 
-console.log("worker_background_worker end");
-
 let worker_background: WorkerBackground<unknown>;
 
 globalThis.onmessage = (e: MessageEvent) => {
   const { override_object } = e.data;
   worker_background = new WorkerBackground(override_object);
   postMessage(worker_background.ref());
+
+  console.log("worker_background ready");
 }

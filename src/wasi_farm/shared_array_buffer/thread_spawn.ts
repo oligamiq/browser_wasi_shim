@@ -107,20 +107,16 @@ export class ThreadSpawner {
       }
     }
 
-    const url = new URL("/examples/wasi_multi_threads/thread_spawn.js", import.meta.url);
-
-    const worker = this.worker_background_ref.new_worker(url.href, { type: "module" }, {
+    const worker = this.worker_background_ref.new_worker(
+      this.worker_url,
+      { type: "module" },
+      {
       this_is_thread_spawn: true,
       start_arg,
       args,
       env,
       fd_map,
     });
-
-    console.log("url", url.href);
-
-    console.log("worker:url", this.worker_url);
-    console.log("worker", worker);
 
     const thread_id = worker.get_id();
 
@@ -171,11 +167,11 @@ export const thread_spawn_on_worker = async (
     fd_map: Array<number []>;
   }
 ): Promise<WASIFarmAnimal> => {
-  console.log("msg", msg);
   if (msg.this_is_thread_spawn) {
 
     const { worker_id: thread_id, start_arg, args, env, sl_object, thread_spawn_wasm } = msg;
-    console.log("thread_spawn_on_worker", thread_id);
+
+    console.log(`thread_spawn worker ${thread_id} start`);
 
     const thread_spawner = ThreadSpawner.init_self_with_worker_background_ref(sl_object, msg.worker_background_ref);
 
@@ -218,6 +214,10 @@ export const thread_spawn_on_worker = async (
         wasi_thread_start: (thread_id: number, start_arg: number) => void;
       };
     }, thread_id, start_arg);
+
+    globalThis.postMessage({
+      msg: "done"
+    });
 
     return wasi;
   }
