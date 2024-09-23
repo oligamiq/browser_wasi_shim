@@ -1,6 +1,6 @@
-console.log("thread_spawn1.js");
+import { thread_spawn_on_worker } from "../thread_spawn.js";
 
-import { thread_spawn_on_worker } from "../../dist/wasi_farm/shared_array_buffer/thread_spawn.js";
+console.log("thread_spawn1.js");
 
 self.postMessage("thread_spawn2.js");
 

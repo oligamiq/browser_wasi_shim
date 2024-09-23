@@ -34,110 +34,110 @@
  */
 
 (function () {
-    if (typeof Atomics.waitAsync === "function")
-        return;
+  if (typeof Atomics.waitAsync === "function")
+      return;
 
-    let helperCode = `
-    onmessage = function (ev) {
-        try {
-            switch (ev.data[0]) {
-              case 'wait': {
-                let [_, ia, index, value, timeout] = ev.data;
-                let result = Atomics.wait(ia, index, value, timeout)
-                postMessage(['ok', result]);
-                break;
-              }
-              default: {
-                throw new Error("Bogus message sent to wait helper: " + ev.data.join(','));
-              }
+  let helperCode = `
+  onmessage = function (ev) {
+      try {
+          switch (ev.data[0]) {
+            case 'wait': {
+              let [_, ia, index, value, timeout] = ev.data;
+              let result = Atomics.wait(ia, index, value, timeout)
+              postMessage(['ok', result]);
+              break;
             }
-        } catch (e) {
-            console.log("Exception in wait helper");
-            postMessage(['error', 'Exception']);
-        }
-    }
-    `;
-
-    let helpers = [];
-
-    function allocHelper() {
-        if (helpers.length > 0)
-            return helpers.pop();
-        let h = new Worker("data:application/javascript," + encodeURIComponent(helperCode));
-        return h;
-    }
-
-    function freeHelper(h) {
-        helpers.push(h);
-    }
-
-    // Atomics.waitAsync always returns a promise.  Throws standard errors
-    // for parameter validation.  The promise is resolved with a string as from
-    // Atomics.wait, or, in the case something went completely wrong, it is
-    // rejected with an error string.
-
-    function waitAsync(ia, index_, value_, timeout_) {
-        if (typeof ia != "object" || !(ia instanceof Int32Array) || !(ia.buffer instanceof SharedArrayBuffer))
-            throw new TypeError("Expected shared memory");
-
-        // These conversions only approximate the desired semantics but are
-        // close enough for the polyfill.
-
-        let index = index_|0;
-        let value = value_|0;
-        let timeout = timeout_ === undefined ? Infinity : +timeout_;
-
-        // Range checking for the index.
-
-        ia[index];
-
-        // Optimization, avoid the helper thread in this common case.
-
-        if (Atomics.load(ia, index) != value)
-            return Promise.resolve("not-equal");
-
-        // General case, we must wait.
-
-        return new Promise(function (resolve, reject) {
-            let h = allocHelper();
-            h.onmessage = function (ev) {
-                // Free the helper early so that it can be reused if the resolution
-                // needs a helper.
-                freeHelper(h);
-                switch (ev.data[0]) {
-                  case 'ok':
-                    resolve(ev.data[1]);
-                    break;
-                  case 'error':
-                    // Note, rejection is not in the spec, it is an artifact of the polyfill.
-                    // The helper already printed an error to the console.
-                    reject(ev.data[1]);
-                    break;
-                }
+            default: {
+              throw new Error("Bogus message sent to wait helper: " + ev.data.join(','));
             }
+          }
+      } catch (e) {
+          console.log("Exception in wait helper");
+          postMessage(['error', 'Exception']);
+      }
+  }
+  `;
 
-            // It's possible to do better here if the ia is already known to the
-            // helper.  In that case we can communicate the other data through
-            // shared memory and wake the agent.  And it is possible to make ia
-            // known to the helper by waking it with a special value so that it
-            // checks its messages, and then posting the ia to the helper.  Some
-            // caching / decay scheme is useful no doubt, to improve performance
-            // and avoid leaks.
-            //
-            // In the event we wake the helper directly, we can micro-wait here
-            // for a quick result.  We'll need to restructure some code to make
-            // that work out properly, and some synchronization is necessary for
-            // the helper to know that we've picked up the result and no
-            // postMessage is necessary.
+  let helpers = [];
 
-            h.postMessage(['wait', ia, index, value, timeout]);
-        })
-    }
+  function allocHelper() {
+      if (helpers.length > 0)
+          return helpers.pop();
+      let h = new Worker("data:application/javascript," + encodeURIComponent(helperCode));
+      return h;
+  }
 
-    Object.defineProperty(Atomics, 'waitAsync', {
-        value: waitAsync,
-        configurable: true,
-        enumerable: false,
-        writable: true,
-    });
+  function freeHelper(h) {
+      helpers.push(h);
+  }
+
+  // Atomics.waitAsync always returns a promise.  Throws standard errors
+  // for parameter validation.  The promise is resolved with a string as from
+  // Atomics.wait, or, in the case something went completely wrong, it is
+  // rejected with an error string.
+
+  function waitAsync(ia, index_, value_, timeout_) {
+      if (typeof ia != "object" || !(ia instanceof Int32Array) || !(ia.buffer instanceof SharedArrayBuffer))
+          throw new TypeError("Expected shared memory");
+
+      // These conversions only approximate the desired semantics but are
+      // close enough for the polyfill.
+
+      let index = index_|0;
+      let value = value_|0;
+      let timeout = timeout_ === undefined ? Infinity : +timeout_;
+
+      // Range checking for the index.
+
+      ia[index];
+
+      // Optimization, avoid the helper thread in this common case.
+
+      if (Atomics.load(ia, index) != value)
+          return Promise.resolve("not-equal");
+
+      // General case, we must wait.
+
+      return new Promise(function (resolve, reject) {
+          let h = allocHelper();
+          h.onmessage = function (ev) {
+              // Free the helper early so that it can be reused if the resolution
+              // needs a helper.
+              freeHelper(h);
+              switch (ev.data[0]) {
+                case 'ok':
+                  resolve(ev.data[1]);
+                  break;
+                case 'error':
+                  // Note, rejection is not in the spec, it is an artifact of the polyfill.
+                  // The helper already printed an error to the console.
+                  reject(ev.data[1]);
+                  break;
+              }
+          }
+
+          // It's possible to do better here if the ia is already known to the
+          // helper.  In that case we can communicate the other data through
+          // shared memory and wake the agent.  And it is possible to make ia
+          // known to the helper by waking it with a special value so that it
+          // checks its messages, and then posting the ia to the helper.  Some
+          // caching / decay scheme is useful no doubt, to improve performance
+          // and avoid leaks.
+          //
+          // In the event we wake the helper directly, we can micro-wait here
+          // for a quick result.  We'll need to restructure some code to make
+          // that work out properly, and some synchronization is necessary for
+          // the helper to know that we've picked up the result and no
+          // postMessage is necessary.
+
+          h.postMessage(['wait', ia, index, value, timeout]);
+      })
+  }
+
+  Object.defineProperty(Atomics, 'waitAsync', {
+      value: waitAsync,
+      configurable: true,
+      enumerable: false,
+      writable: true,
+  });
 })();

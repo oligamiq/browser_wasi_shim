@@ -1,6 +1,6 @@
 // @ts-ignore
 // import { debug } from "../../debug.js";
-import "../polyfill.js";
+// import "../polyfill.js";
 
 export type AllocatorUseArrayBufferObject = {
   share_arrays_memory: SharedArrayBuffer;
@@ -210,5 +210,11 @@ export class AllocatorUseArrayBuffer {
   ) {
     const memory = new Uint8Array(this.share_arrays_memory);
     memory.set(new Uint8Array(data).slice(0, len), ptr);
+  }
+
+  get_object(): AllocatorUseArrayBufferObject {
+    return {
+      share_arrays_memory: this.share_arrays_memory,
+    };
   }
 }

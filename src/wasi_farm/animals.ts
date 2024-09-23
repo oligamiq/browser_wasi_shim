@@ -273,10 +273,6 @@ export class WASIFarmAnimal {
 
     // console.log("this.wasi_farm_refs", this.wasi_farm_refs);
 
-    this.mapping_fds(this.wasi_farm_refs, override_fd_maps);
-
-    // console.log("this.fd_map", this.fd_map);
-
     if (options.can_thread_spawn) {
       this.can_thread_spawn = options.can_thread_spawn;
 
@@ -294,6 +290,10 @@ export class WASIFarmAnimal {
         this.thread_spawner = new ThreadSpawner(options.thread_spawn_worker_url, wasi_farm_refs_tmp);
       }
     }
+
+    this.mapping_fds(this.wasi_farm_refs, override_fd_maps);
+
+    // console.log("this.fd_map", this.fd_map);
 
     this.args = args;
     this.env = env;

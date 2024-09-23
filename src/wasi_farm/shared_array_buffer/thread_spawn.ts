@@ -16,24 +16,23 @@
 
 import { WASIFarmAnimal } from "../animals.js";
 import { WASIFarmRefObject } from "../ref.js";
-import { WorkerBackgroundRef } from "../worker_background/worker_background_ref.js";
-import { url as worker_background_worker_url } from "../worker_background/worker_blob.js";
+import { WorkerBackgroundRefObject } from "./worker_background/worker.js";
+import { WorkerBackgroundRef } from "./worker_background/worker_background_ref.js";
+import { url as worker_background_worker_url } from "./worker_background/worker_blob.js";
 
 type ThreadSpawnerObject = {
-  thread_id_and_lock: SharedArrayBuffer;
   share_memory: WebAssembly.Memory;
   wasi_farm_refs_object: Array<WASIFarmRefObject>;
   worker_url: string;
-  worker_background_ref_id: string;
+  worker_background_ref_object: WorkerBackgroundRefObject;
 };
 
 export class ThreadSpawner {
-  private thread_id_and_lock: SharedArrayBuffer;
   private share_memory: WebAssembly.Memory;
   private wasi_farm_refs_object: Array<WASIFarmRefObject>;
   private worker_url: string;
   private worker_background_ref: WorkerBackgroundRef;
-  private worker_background_ref_id: string;
+  private worker_background_ref_object: WorkerBackgroundRefObject;
 
   // hold the worker to prevent GC.
   private worker_background_worker?: Worker;
@@ -44,21 +43,12 @@ export class ThreadSpawner {
   constructor(
     worker_url: string,
     wasi_farm_refs_object: Array<WASIFarmRefObject>,
-    thread_id_and_lock?: SharedArrayBuffer,
     share_memory?: WebAssembly.Memory,
     // 16MB for the time being.
     // https://users.rust-lang.org/t/what-is-the-size-limit-of-threads-stack-in-rust/11867/3
     MIN_STACK: number = 16777216,
-    worker_background_ref_id?: string,
+    worker_background_ref_object?: WorkerBackgroundRefObject,
   ) {
-    if (thread_id_and_lock) {
-      this.thread_id_and_lock = thread_id_and_lock;
-    } else {
-      this.thread_id_and_lock = new SharedArrayBuffer(8);
-      const thread_id_and_lock_view = new Uint32Array(this.thread_id_and_lock);
-      Atomics.store(thread_id_and_lock_view, 0, 1);
-    }
-
     this.worker_url = worker_url;
     this.wasi_farm_refs_object = wasi_farm_refs_object;
 
@@ -73,18 +63,23 @@ export class ThreadSpawner {
     // WebAssembly.Memory's 1 page is 65536 bytes.
       new WebAssembly.Memory({ initial: initial_size, maximum: max_memory, shared: true });
 
-    if (worker_background_ref_id === undefined) {
-      this.worker_background_worker = new Worker(worker_background_worker_url, { type: "module" });
+    if (worker_background_ref_object === undefined) {
+      const worker_background_worker_url__ = worker_background_worker_url();
+      this.worker_background_worker = new Worker(worker_background_worker_url__, { type: "module" });
+      URL.revokeObjectURL(worker_background_worker_url__);
       const { promise, resolve } = Promise.withResolvers<void>();
       this.worker_background_worker_promise = promise;
       this.worker_background_worker.onmessage = (e) => {
-        this.worker_background_ref_id = e.data;
-        this.worker_background_ref = new WorkerBackgroundRef(this.worker_background_ref_id);
+        this.worker_background_ref_object = e.data;
+        this.worker_background_ref = WorkerBackgroundRef.init_self(this.worker_background_ref_object);
         resolve();
       }
+      this.worker_background_worker.postMessage({ override_object: {
+        sl_object: this.get_object(),
+      } });
     } else {
-      this.worker_background_ref_id = worker_background_ref_id;
-      this.worker_background_ref = new WorkerBackgroundRef(this.worker_background_ref_id);
+      this.worker_background_ref_object = worker_background_ref_object;
+      this.worker_background_ref = WorkerBackgroundRef.init_self(this.worker_background_ref_object);
     }
   }
 
@@ -96,66 +91,12 @@ export class ThreadSpawner {
     }
   }
 
-  lock(): void {
-    const lock_view = new Int32Array(this.thread_id_and_lock, 4);
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      const value = Atomics.wait(lock_view, 0, 1);
-      if (value === "timed-out") {
-        console.error("lock_fd timed-out");
-        continue;
-      }
-      const old = Atomics.compareExchange(lock_view, 0, 0, 1);
-      if (old === 0) {
-        // console.log("lock_fd success", fd);
-        return;
-      }
-    }
-  }
-
-  release(): void {
-    const lock_view = new Int32Array(this.thread_id_and_lock, 4);
-    const old = Atomics.compareExchange(lock_view, 0, 1, 0);
-    if (old !== 1) {
-      throw new Error("release_fd failed");
-    }
-    Atomics.notify(lock_view, 0);
-  }
-
-  wait_release(): void {
-    const lock_view = new Int32Array(this.thread_id_and_lock, 4);
-    const ret = Atomics.wait(lock_view, 0, 1);
-    if (ret === "timed-out") {
-      throw new Error("wait_release timed-out");
-    }
-  }
-
   thread_spawn(
     start_arg: number,
     args: Array<string>,
     env: Array<string>,
     fd_map: Array<[number, number]>,
   ): number {
-    this.lock();
-
-    console.log("thread_spawn", this.thread_id_and_lock);
-
-    const thread_id_and_lock_view = new Uint32Array(this.thread_id_and_lock);
-    const thread_id = Atomics.add(thread_id_and_lock_view, 0, 1);
-    const sl_object: ThreadSpawnerObject = {
-      thread_id_and_lock: this.thread_id_and_lock,
-      share_memory: this.share_memory,
-      wasi_farm_refs_object: this.wasi_farm_refs_object,
-      worker_url: this.worker_url,
-      worker_background_ref_id: this.worker_background_ref_id,
-    };
-
-    console.log("WorkerLocation", self.location);
-
-    console.log("self.Worker", self.Worker);
-
-    console.log("self.Worker.toString()", self.Worker.toString());
-
     if (!(self.Worker.toString().includes("[native code]"))) {
       if (self.Worker.toString().includes("function")) {
         console.warn("SubWorker(new Worker on Worker) is polyfilled maybe.");
@@ -164,35 +105,22 @@ export class ThreadSpawner {
       }
     }
 
-    // const worker = new Worker("./thread_spawn.js", { type: "module" });
-    // const url = new URL("./thread_spawn.js", self.location.href);
     const url = new URL("/examples/wasi_multi_threads/thread_spawn.js", import.meta.url);
-    // const worker = new Worker(url, { type: "module" });
 
-    const worker = this.worker_background_ref.worker(url.href, { type: "module" });
+    const worker = this.worker_background_ref.new_worker(url.href, { type: "module" }, {
+      this_is_thread_spawn: true,
+      start_arg,
+      args,
+      env,
+      fd_map,
+    });
 
     console.log("url", url.href);
 
     console.log("worker:url", this.worker_url);
     console.log("worker", worker);
 
-    worker.onmessage = (e) => {
-      console.log("worker.onmessage", e);
-
-      worker.postMessage({
-        this_is_thread_spawn: true,
-        thread_id,
-        start_arg,
-        sl_object,
-        args,
-        env,
-        fd_map,
-      });
-    }
-
-    console.log("thread_spawn", thread_id);
-
-    // this.wait_release();
+    const thread_id = worker.get_id();
 
     return thread_id;
   }
@@ -200,13 +128,29 @@ export class ThreadSpawner {
   static init_self(
     sl: ThreadSpawnerObject,
   ): ThreadSpawner {
-    const thread_spawner = new ThreadSpawner(sl.worker_url, sl.wasi_farm_refs_object, sl.thread_id_and_lock, sl.share_memory, undefined, sl.worker_background_ref_id);
-    thread_spawner.wasi_farm_refs_object = sl.wasi_farm_refs_object;
+    const thread_spawner = new ThreadSpawner(sl.worker_url, sl.wasi_farm_refs_object, sl.share_memory, undefined, sl.worker_background_ref_object);
+    return thread_spawner;
+  }
+
+  static init_self_with_worker_background_ref(
+    sl: ThreadSpawnerObject,
+    worker_background_ref_object: WorkerBackgroundRefObject,
+  ): ThreadSpawner {
+    const thread_spawner = new ThreadSpawner(sl.worker_url, sl.wasi_farm_refs_object, sl.share_memory, undefined, worker_background_ref_object);
     return thread_spawner;
   }
 
   get_share_memory(): WebAssembly.Memory {
     return this.share_memory;
+  }
+
+  get_object(): ThreadSpawnerObject {
+    return {
+      share_memory: this.share_memory,
+      wasi_farm_refs_object: this.wasi_farm_refs_object,
+      worker_url: this.worker_url,
+      worker_background_ref_object: this.worker_background_ref_object,
+    };
   }
 }
 
@@ -215,20 +159,22 @@ export class ThreadSpawner {
 export const thread_spawn_on_worker = (
   msg: {
     this_is_thread_spawn: boolean;
-    thread_id: number;
+    worker_id: number;
     start_arg: number;
+    worker_background_ref: WorkerBackgroundRefObject;
     sl_object: ThreadSpawnerObject;
     args: Array<string>;
     env: Array<string>;
     fd_map: Array<number []>;
   }
 ): WASIFarmAnimal => {
+  console.log("msg", msg);
   if (msg.this_is_thread_spawn) {
-    console.log("thread_spawn_on_worker", msg.thread_id);
 
-    const sl_object = msg.sl_object;
-    const thread_spawner = ThreadSpawner.init_self(msg.sl_object);
-    const { thread_id, start_arg, args, env } = msg;
+    const { worker_id: thread_id, start_arg, args, env, sl_object } = msg;
+    console.log("thread_spawn_on_worker", thread_id);
+
+    const thread_spawner = ThreadSpawner.init_self_with_worker_background_ref(sl_object, msg.worker_background_ref);
 
     const override_fd_map: Array<number []> = new Array(sl_object.wasi_farm_refs_object.length);
 
@@ -258,8 +204,6 @@ export const thread_spawn_on_worker = (
     //   "wasi": strace(wasi.wasiThreadImport, ["thread-spawn"]),
     //   "wasi_snapshot_preview1": strace(w.wasiImport, ["fd_prestat_get"]),
     // });
-
-    thread_spawner.release();
 
     return wasi_animal;
   }
