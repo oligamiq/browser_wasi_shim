@@ -2,9 +2,9 @@ import { debug } from "../debug.js";
 import { Options, WASIProcExit } from "../wasi.js";
 import { WASIFarmRef, WASIFarmRefObject } from "./ref.js";
 import * as wasi from "../wasi_defs.js";
-import { WASIFarmRefUseArrayBuffer, WASIFarmRefUseArrayBufferObject } from "./shared_array_buffer/ref.js";
+import { WASIFarmRefUseArrayBuffer, WASIFarmRefUseArrayBufferObject } from "./shared_array_buffer/index.js";
 import { FdCloseSender } from "./sender.js";
-import { ThreadSpawner } from "./shared_array_buffer/thread_spawn.js";
+import { ThreadSpawner } from "./shared_array_buffer/index.js";
 
 export class WASIFarmAnimal {
   private args: Array<string>;

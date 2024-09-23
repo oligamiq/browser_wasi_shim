@@ -16,9 +16,7 @@
 
 import { WASIFarmAnimal } from "../animals.js";
 import { WASIFarmRefObject } from "../ref.js";
-import { WorkerBackgroundRefObject } from "./worker_background/worker.js";
-import { WorkerBackgroundRef } from "./worker_background/worker_background_ref.js";
-import { url as worker_background_worker_url } from "./worker_background/worker_blob.js";
+import { WorkerBackgroundRefObject, WorkerBackgroundRef, worker_background_worker_url } from "./worker_background/index.js";
 
 type ThreadSpawnerObject = {
   share_memory: WebAssembly.Memory;

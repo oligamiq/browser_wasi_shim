@@ -3,7 +3,7 @@ import { Fd } from "../fd.js";
 import { Options } from "../wasi.js";
 import { WASIFarmPark } from "./park.js";
 import { WASIFarmRefObject } from "./ref.js";
-import { WASIFarmParkUseArrayBuffer } from "./shared_array_buffer/park.js";
+import { WASIFarmParkUseArrayBuffer } from "./shared_array_buffer/index.js";
 
 export class WASIFarm {
   private fds: Array<Fd>;
