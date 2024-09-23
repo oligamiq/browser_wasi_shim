@@ -1,8 +1,10 @@
 import { debug } from "../debug.js";
 import { Options, WASIProcExit } from "../wasi.js";
-import { WASIFarmRef, WASIFarmRefObject } from "./ref.js";
+import { WASIFarmRef } from "./ref.js";
+import type { WASIFarmRefObject } from "./ref.js";
 import * as wasi from "../wasi_defs.js";
-import { WASIFarmRefUseArrayBuffer, WASIFarmRefUseArrayBufferObject } from "./shared_array_buffer/index.js";
+import { WASIFarmRefUseArrayBuffer } from "./shared_array_buffer/index.js";
+import type { WASIFarmRefUseArrayBufferObject } from "./shared_array_buffer/index.js";
 import { FdCloseSender } from "./sender.js";
 import { ThreadSpawner } from "./shared_array_buffer/index.js";
 
