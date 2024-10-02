@@ -589,6 +589,7 @@ export class WASIFarmAnimal {
         return wasi_farm_ref.fd_allocate(mapped_fd, offset, len);
       },
       fd_close(fd: number) {
+        console.log("## fd_close", fd);
         self.check_fds();
         const [mapped_fd, wasi_farm_ref] = self.get_fd_and_wasi_ref(fd);
         if (mapped_fd === undefined || wasi_farm_ref === undefined) {

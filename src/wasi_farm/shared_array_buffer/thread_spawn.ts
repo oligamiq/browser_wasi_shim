@@ -332,7 +332,7 @@ export const thread_spawn_on_worker = async (msg: {
           memory: wasi.get_share_memory(),
         },
         wasi: wasi.wasiThreadImport,
-        wasi_snapshot_preview1: wasi.wasiImport,
+        wasi_snapshot_preview1: strace(wasi.wasiImport, []),
       };
 
       if (msg.extend_imports) {

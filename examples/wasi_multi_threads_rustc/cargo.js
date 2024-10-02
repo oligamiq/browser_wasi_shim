@@ -21,11 +21,12 @@ onmessage = async function (e) {
 			[
 				"RUST_MIN_STACK=16777216",
 				"HOME=/home/wasi",
-				"RUST_LOG=debug",
+				"CARGO_LOG=debug",
 				"RUST_BACKTRACE=full",
+				"CARGO=cargo",
 				// This is made up of forced patches. Usually not available.
 				"RUSTC_SYSROOT=/sysroot-with-lld",
-				"RUSTFLAGS=",
+				"LD_LIBRARY_PATH=/lib",
 			], // env
 			{
 				// debug: true,

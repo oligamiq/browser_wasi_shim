@@ -223,6 +223,10 @@ self.onmessage = async (e) => {
 
 	cat = new SharedObject.SharedObjectRef("cat").proxy();
 
+	// tree / -a
+	await term.writeln(`\n$${blueText} tree / -a${resetText}`);
+	await tree("/", "-a");
+
 	// cargo -h
 	await term.writeln(`\n$${blueText} cargo -h${resetText}`);
 	await cargo("-h");
@@ -247,17 +251,27 @@ self.onmessage = async (e) => {
 	await term.writeln(`\n$${blueText} cargo run -h${resetText}`);
 	await cargo("run", "-h");
 
-	// cargo run --manifest-path /helloworld/Cargo.toml --jobs 1 -- --sysroot /sysroot-with-lld
+	// cargo run --manifest-path /helloworld/Cargo.toml --jobs 1 --target wasm32-wasi
 	await term.writeln(
-		`\n$${blueText} cargo run --manifest-path /helloworld/Cargo.toml --jobs 1`,
+		`\n$${blueText} cargo run --manifest-path /helloworld/Cargo.toml --jobs 1 --target wasm32-wasi${resetText}`,
 	);
-	await cargo(
-		"run",
-		"--manifest-path",
-		"/helloworld/Cargo.toml",
-		"--jobs",
-		"1",
-	);
+	try {
+		await cargo(
+			"run",
+			"--manifest-path",
+			"/helloworld/Cargo.toml",
+			"--jobs",
+			"1",
+			"--target",
+			"wasm32-wasi",
+		);
+	} catch (e) {
+		console.error(e);
+	}
+
+	// tree / -a
+	await term.writeln(`\n$${blueText} tree / -a${resetText}`);
+	await tree("/", "-a");
 
 	// llvm-tools
 	await term.writeln(`$${blueText} llvm-tools${resetText}`);

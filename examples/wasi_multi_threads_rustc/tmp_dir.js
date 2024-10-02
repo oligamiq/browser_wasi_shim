@@ -3,6 +3,7 @@ import {
 	WASIFarm,
 	File,
 	Directory,
+	Fd,
 } from "../../dist/index.js";
 
 const { promise, resolve } = Promise.withResolvers();
@@ -19,8 +20,29 @@ const root_dir = new PreopenDirectory("/", [
 	],
 	["sysroot", new Directory([])],
 	["sysroot-with-lld", new Directory([])],
+	["home", new Directory([])],
 	["tmp", new Directory([])],
+	["lib", new Directory([])],
+	["cargo", new File(new TextEncoder("utf-8").encode(""))],
 ]);
+
+class DevUrandom extends Directory {
+	// fd_read(size: number): {
+	// 	ret: number;
+	// 	data: Uint8Array;
+	// };
+	fd_read(size) {
+		const data = new Uint8Array(size);
+		for (let i = 0; i < size; i++) {
+			data[i] = Math.floor(Math.random() * 256);
+		}
+
+		return {
+			ret: 0,
+			data,
+		};
+	}
+}
 
 const farm = new WASIFarm(
 	undefined,
@@ -43,6 +65,10 @@ const farm = new WASIFarm(
 		// 	],
 		// ]),
 		new PreopenDirectory("/tmp", []),
+		new PreopenDirectory("/home", [
+			["wasi", new Directory([[".cargo", new Directory([])]])],
+		]),
+		new PreopenDirectory("/dev", [["urandom", new DevUrandom()]]),
 		root_dir,
 		new PreopenDirectory("~", [
 			[
