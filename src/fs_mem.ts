@@ -48,6 +48,8 @@ export class OpenFile extends Fd {
       Number(this.file_pos + BigInt(size)),
     );
     this.file_pos += BigInt(slice.length);
+    // update
+    this.file.file_stat.atim = BigInt(Date.now());
     return { ret: 0, data: slice };
   }
 
@@ -56,6 +58,8 @@ export class OpenFile extends Fd {
       Number(offset),
       Number(offset + BigInt(size)),
     );
+    // update
+    this.file.file_stat.atim = BigInt(Date.now());
     return { ret: 0, data: slice };
   }
 
@@ -100,6 +104,13 @@ export class OpenFile extends Fd {
 
     this.file.data.set(data, Number(this.file_pos));
     this.file_pos += BigInt(data.byteLength);
+
+    // update
+    const time = BigInt(Date.now());
+    this.file.file_stat.atim = time;
+    this.file.file_stat.mtim = time;
+    this.file.file_stat.size = BigInt(this.file.data.byteLength);
+
     return { ret: 0, nwritten: data.byteLength };
   }
 
@@ -113,6 +124,13 @@ export class OpenFile extends Fd {
     }
 
     this.file.data.set(data, Number(offset));
+
+    // update
+    const time = BigInt(Date.now());
+    this.file.file_stat.atim = time;
+    this.file.file_stat.mtim = time;
+    this.file.file_stat.size = BigInt(this.file.data.byteLength);
+
     return { ret: 0, nwritten: data.byteLength };
   }
 
