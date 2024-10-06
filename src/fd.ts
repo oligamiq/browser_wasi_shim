@@ -121,6 +121,30 @@ export abstract class Inode {
   file_stat: wasi.Filestat;
   constructor(file_stat: wasi.Filestat) {
     this.file_stat = file_stat;
+    const time = BigInt(new Date().getTime()) * 1_000_000n;
+    this.file_stat.ctim = time;
+    this.file_stat.atim = time;
+    this.file_stat.mtim = time;
+  }
+
+  update_mtim() {
+    let time = BigInt(new Date().getTime()) * 1_000_000n;
+    if (this.file_stat.ctim > time) {
+      time = this.file_stat.ctim;
+    }
+    this.file_stat.atim = time;
+    this.file_stat.mtim = time;
+  }
+
+  update_atim() {
+    let time = BigInt(new Date().getTime()) * 1_000_000n;
+    if (this.file_stat.ctim > time) {
+      time = this.file_stat.ctim;
+    }
+    if (this.file_stat.mtim > time) {
+      time = this.file_stat.mtim;
+    }
+    this.file_stat.atim = time;
   }
 
   abstract path_open(

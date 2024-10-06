@@ -19,6 +19,7 @@ export class OpenFile extends Fd {
       const new_data = new Uint8Array(Number(offset + len));
       new_data.set(this.file.data, 0);
       this.file.data = new_data;
+      this.file.file_stat.size = BigInt(new_data.byteLength);
     }
     return wasi.ERRNO_SUCCESS;
   }
@@ -39,6 +40,7 @@ export class OpenFile extends Fd {
       new_data.set(this.file.data, 0);
       this.file.data = new_data;
     }
+    this.file.file_stat.size = size;
     return wasi.ERRNO_SUCCESS;
   }
 
@@ -49,7 +51,7 @@ export class OpenFile extends Fd {
     );
     this.file_pos += BigInt(slice.length);
     // update
-    this.file.file_stat.atim = BigInt(Date.now());
+    this.file.update_atim();
     return { ret: 0, data: slice };
   }
 
@@ -59,7 +61,7 @@ export class OpenFile extends Fd {
       Number(offset + BigInt(size)),
     );
     // update
-    this.file.file_stat.atim = BigInt(Date.now());
+    this.file.update_atim();
     return { ret: 0, data: slice };
   }
 
@@ -106,10 +108,7 @@ export class OpenFile extends Fd {
     this.file_pos += BigInt(data.byteLength);
 
     // update
-    const time = BigInt(Date.now());
-    this.file.file_stat.atim = time;
-    this.file.file_stat.mtim = time;
-    this.file.file_stat.size = BigInt(this.file.data.byteLength);
+    this.file.update_mtim();
 
     return { ret: 0, nwritten: data.byteLength };
   }
@@ -126,15 +125,20 @@ export class OpenFile extends Fd {
     this.file.data.set(data, Number(offset));
 
     // update
-    const time = BigInt(Date.now());
-    this.file.file_stat.atim = time;
-    this.file.file_stat.mtim = time;
+    this.file.update_mtim();
     this.file.file_stat.size = BigInt(this.file.data.byteLength);
 
     return { ret: 0, nwritten: data.byteLength };
   }
 
   fd_filestat_get(): { ret: number; filestat: wasi.Filestat } {
+    console.log("filestat_get", this.file.stat());
+    console.log(this.file);
+    this.file.file_stat.size = BigInt(this.file.data.byteLength);
+    this.file.file_stat.ctim = 0n;
+    this.file.file_stat.atim = 0n;
+    this.file.file_stat.mtim = 0n;
+
     return { ret: 0, filestat: this.file.stat() };
   }
 
@@ -146,6 +150,10 @@ export class OpenFile extends Fd {
       this.file.file_stat.mtim = mtim;
     }
     return wasi.ERRNO_SUCCESS;
+  }
+
+  fd_prestat_get(): { ret: number; prestat: wasi.Prestat | null } {
+    return { ret: wasi.ERRNO_BADF, prestat: null };
   }
 }
 
@@ -547,23 +555,12 @@ export class File extends Inode {
     if ((oflags & wasi.OFLAGS_TRUNC) == wasi.OFLAGS_TRUNC) {
       if (this.readonly) return { ret: wasi.ERRNO_PERM, fd_obj: null };
       this.data = new Uint8Array([]);
+      this.file_stat.size = 0n;
     }
 
     const file = new OpenFile(this);
     if (fd_flags & wasi.FDFLAGS_APPEND) file.fd_seek(0n, wasi.WHENCE_END);
     return { ret: wasi.ERRNO_SUCCESS, fd_obj: file };
-  }
-
-  path_filestat_set_times(
-    flags: number,
-    path_str: string,
-    atim: bigint,
-    mtim: bigint,
-    fst_flags: number,
-  ): number {
-    this.file_stat.atim = atim;
-    this.file_stat.mtim = mtim;
-    return wasi.ERRNO_SUCCESS;
   }
 
   get size(): bigint {

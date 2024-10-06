@@ -34,7 +34,7 @@ class WorkerBackground<T> {
     this.lock = lock ?? new SharedArrayBuffer(20);
     this.allocator =
       allocator ??
-      new AllocatorUseArrayBuffer(new SharedArrayBuffer(10 * 1024));
+      new AllocatorUseArrayBuffer(new SharedArrayBuffer(1024 * 1024));
     this.signature_input = signature_input ?? new SharedArrayBuffer(24);
     this.listen_holder = this.listen();
   }
@@ -96,25 +96,35 @@ class WorkerBackground<T> {
           throw new Error("locked");
         }
 
+        const gen_worker = () => {
+          console.log("gen_worker");
+          const url_ptr = Atomics.load(signature_input_view, 1);
+          const url_len = Atomics.load(signature_input_view, 2);
+          const url_buff = this.allocator.get_memory(url_ptr, url_len);
+          this.allocator.free(url_ptr, url_len);
+          const url = new TextDecoder().decode(url_buff);
+          const is_module = Atomics.load(signature_input_view, 3) === 1;
+          return new Worker(url, {
+            type: is_module ? "module" : "classic",
+          });
+        };
+
+        const gen_obj = () => {
+          console.log("gen_obj");
+          const json_ptr = Atomics.load(signature_input_view, 4);
+          const json_len = Atomics.load(signature_input_view, 5);
+          const json_buff = this.allocator.get_memory(json_ptr, json_len);
+          this.allocator.free(json_ptr, json_len);
+          const json = new TextDecoder().decode(json_buff);
+          return JSON.parse(json);
+        };
+
         const signature_input = Atomics.load(signature_input_view, 0);
         switch (signature_input) {
           // create new worker
           case 1: {
-            const url_ptr = Atomics.load(signature_input_view, 1);
-            const url_len = Atomics.load(signature_input_view, 2);
-            const url_buff = this.allocator.get_memory(url_ptr, url_len);
-            this.allocator.free(url_ptr, url_len);
-            const url = new TextDecoder().decode(url_buff);
-            const is_module = Atomics.load(signature_input_view, 3) === 1;
-            const worker = new Worker(url, {
-              type: is_module ? "module" : "classic",
-            });
-            const json_ptr = Atomics.load(signature_input_view, 4);
-            const json_len = Atomics.load(signature_input_view, 5);
-            const json_buff = this.allocator.get_memory(json_ptr, json_len);
-            this.allocator.free(json_ptr, json_len);
-            const json = new TextDecoder().decode(json_buff);
-            const obj = JSON.parse(json);
+            const worker = gen_worker();
+            const obj = gen_obj();
 
             const worker_id = this.assign_worker_id();
 
@@ -143,8 +153,14 @@ class WorkerBackground<T> {
                 this.workers[worker_id] = undefined;
 
                 let n = 0;
+                let first = true;
                 for (const worker of this.workers) {
                   if (worker !== undefined) {
+                    if (first) {
+                      first = false;
+                      // sleep 1000
+                      await new Promise((resolve) => setTimeout(resolve, 1000));
+                    }
                     worker.terminate();
                     console.warn(
                       `wasi throw error but child process exists, terminate ${n}`,
@@ -212,21 +228,8 @@ class WorkerBackground<T> {
           }
           // create start
           case 2: {
-            const url_ptr = Atomics.load(signature_input_view, 1);
-            const url_len = Atomics.load(signature_input_view, 2);
-            const url_buff = this.allocator.get_memory(url_ptr, url_len);
-            this.allocator.free(url_ptr, url_len);
-            const url = new TextDecoder().decode(url_buff);
-            const is_module = Atomics.load(signature_input_view, 3) === 1;
-            this.start_worker = new Worker(url, {
-              type: is_module ? "module" : "classic",
-            });
-            const json_ptr = Atomics.load(signature_input_view, 4);
-            const json_len = Atomics.load(signature_input_view, 5);
-            const json_buff = this.allocator.get_memory(json_ptr, json_len);
-            this.allocator.free(json_ptr, json_len);
-            const json = new TextDecoder().decode(json_buff);
-            const obj = JSON.parse(json);
+            this.start_worker = gen_worker();
+            const obj = gen_obj();
 
             this.start_worker.onmessage = async (e) => {
               const { msg } = e.data;
@@ -256,6 +259,42 @@ class WorkerBackground<T> {
 
             break;
           }
+          case 3: {
+            console.log("####");
+            const worker = gen_worker();
+            const obj = gen_obj();
+
+            console.log("%%%%");
+
+            const { promise, resolve } = Promise.withResolvers<boolean>();
+
+            worker.onmessage = async (e) => {
+              const { msg, is_error } = e.data;
+
+              if (msg === "done") {
+                console.log("$$$$");
+                resolve(is_error);
+              }
+            };
+
+            worker.postMessage({
+              ...this.override_object,
+              ...obj,
+              worker_background_ref: this.ref(),
+            });
+
+            const is_error = await promise;
+
+            worker.terminate();
+
+            if (is_error) {
+              Atomics.store(signature_input_view, 0, -1);
+            } else {
+              Atomics.store(signature_input_view, 0, 0);
+            }
+
+            break;
+          }
         }
 
         const old_call_lock = Atomics.exchange(lock_view, 1, 0);
@@ -272,6 +311,9 @@ class WorkerBackground<T> {
         }
       } catch (e) {
         console.error(e);
+
+        // sleep 1000
+        await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     }
   }

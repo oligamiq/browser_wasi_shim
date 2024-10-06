@@ -20,10 +20,30 @@ const root_dir = new PreopenDirectory("/", [
 	],
 	["sysroot", new Directory([])],
 	["sysroot-with-lld", new Directory([])],
-	["home", new Directory([])],
 	["tmp", new Directory([])],
 	["lib", new Directory([])],
+	["bin", new Directory([["rustc.wasm", new File(new Uint8Array())]])],
+	[
+		"home",
+		new Directory([
+			[
+				"wasi",
+				new Directory([
+					[
+						".cargo",
+						new Directory([
+							[
+								"bin",
+								new Directory([["cargo.wasm", new File(new Uint8Array())]]),
+							],
+						]),
+					],
+				]),
+			],
+		]),
+	],
 	["cargo", new File(new TextEncoder("utf-8").encode(""))],
+	["rustc.wasm", new File(new Uint8Array())],
 ]);
 
 class DevUrandom extends Directory {
@@ -44,46 +64,37 @@ class DevUrandom extends Directory {
 	}
 }
 
-const farm = new WASIFarm(
-	undefined,
-	undefined,
-	undefined,
-	[
-		// new PreopenDirectory(".", [
-		// 	["tmp-tmp", new File(new TextEncoder("utf-8").encode("Hello World!"))],
-		// 	["tmp-dir", new Directory([])],
-		// ]),
-		// new PreopenDirectory("tmp-dir", [
-		// 	[
-		// 		"tmp-dir_inner",
-		// 		new Directory([
-		// 			[
-		// 				"tmp-dir_inner-file",
-		// 				new File(new TextEncoder("utf-8").encode("Hello World!!!!!")),
-		// 			],
-		// 		]),
-		// 	],
-		// ]),
-		new PreopenDirectory("/tmp", []),
-		new PreopenDirectory("/home", [
-			["wasi", new Directory([[".cargo", new Directory([])]])],
-		]),
-		new PreopenDirectory("/dev", [["urandom", new DevUrandom()]]),
-		root_dir,
-		new PreopenDirectory("~", [
-			[
-				"####.rs",
-				new File(
-					new TextEncoder("utf-8").encode(
-						`fn main() { println!("Hello World!"); }`,
-					),
+const farm = new WASIFarm(undefined, undefined, undefined, [
+	// new PreopenDirectory(".", [
+	// 	["tmp-tmp", new File(new TextEncoder("utf-8").encode("Hello World!"))],
+	// 	["tmp-dir", new Directory([])],
+	// ]),
+	// new PreopenDirectory("tmp-dir", [
+	// 	[
+	// 		"tmp-dir_inner",
+	// 		new Directory([
+	// 			[
+	// 				"tmp-dir_inner-file",
+	// 				new File(new TextEncoder("utf-8").encode("Hello World!!!!!")),
+	// 			],
+	// 		]),
+	// 	],
+	// ]),
+	new PreopenDirectory("/tmp", []),
+	new PreopenDirectory("/dev", [["urandom", new DevUrandom()]]),
+	root_dir,
+	new PreopenDirectory("~", [
+		[
+			"####.rs",
+			new File(
+				new TextEncoder("utf-8").encode(
+					`fn main() { println!("Hello World!"); }`,
 				),
-			],
-			["sysroot", new Directory([])],
-		]),
-	],
-	// { debug: true },
-);
+			),
+		],
+		["sysroot", new Directory([])],
+	]),
+]);
 
 const ret = await farm.get_ref();
 

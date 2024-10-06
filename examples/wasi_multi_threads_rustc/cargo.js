@@ -21,18 +21,23 @@ onmessage = async function (e) {
 			[
 				"RUST_MIN_STACK=16777216",
 				"HOME=/home/wasi",
-				"CARGO_LOG=debug",
+				"CARGO_LOG=info",
 				"RUST_BACKTRACE=full",
 				"CARGO=cargo",
 				// This is made up of forced patches. Usually not available.
 				"RUSTC_SYSROOT=/sysroot-with-lld",
 				"LD_LIBRARY_PATH=/lib",
+				"PATH=/bin:/usr/bin:/usr/local/bin:/home/wasi/.cargo/bin",
+				// "CARGO_INCREMENTAL=0",
+				// "CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse",
 			], // env
 			{
 				// debug: true,
 				can_thread_spawn: true,
-				thread_spawn_worker_url: new URL("./thread_spawn.js", import.meta.url)
-					.href,
+				thread_spawn_worker_url: new URL(
+					"./thread_spawn_rustc.js",
+					import.meta.url,
+				).href,
 				// thread_spawn_worker_url: "./thread_spawn.js",
 				thread_spawn_wasm: wasm,
 				extend_imports: true,

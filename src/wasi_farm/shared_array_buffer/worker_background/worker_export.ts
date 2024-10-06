@@ -10,7 +10,7 @@ export const WorkerBackgroundRefObjectConstructor =
   (): WorkerBackgroundRefObject => {
     return {
       allocator: {
-        share_arrays_memory: new SharedArrayBuffer(10 * 1024),
+        share_arrays_memory: new SharedArrayBuffer(1024 * 1024),
       },
       lock: new SharedArrayBuffer(20),
       signature_input: new SharedArrayBuffer(24),

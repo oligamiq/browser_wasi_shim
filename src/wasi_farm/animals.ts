@@ -1,6 +1,7 @@
 import { debug } from "../debug.js";
 import { type Options, WASIProcExit } from "../wasi.js";
 import * as wasi from "../wasi_defs.js";
+import { uint8ArrayToBase64 } from "./base64.js";
 import type { WASIFarmRef } from "./ref.js";
 import type { WASIFarmRefObject } from "./ref.js";
 import type { FdCloseSender } from "./sender.js";
@@ -140,6 +141,7 @@ export class WASIFarmAnimal {
       this.args,
       this.env,
       this.extend_imports,
+      this.fd_map,
     );
 
     const code = await this.thread_spawner.async_wait_done_or_error();
@@ -171,6 +173,7 @@ export class WASIFarmAnimal {
       this.args,
       this.env,
       this.extend_imports,
+      this.fd_map,
     );
 
     console.log("block_start_on_thread: wait");
@@ -1058,6 +1061,16 @@ export class WASIFarmAnimal {
         new_path_ptr: number,
         new_path_len: number,
       ) {
+        console.log(
+          "call path_link",
+          old_fd,
+          old_flags,
+          old_path_ptr,
+          old_path_len,
+          new_fd,
+          new_path_ptr,
+          new_path_len,
+        );
         self.check_fds();
         const [mapped_old_fd, wasi_farm_ref] = self.get_fd_and_wasi_ref(old_fd);
         const [mapped_new_fd, wasi_farm_ref_new] =
@@ -1068,11 +1081,14 @@ export class WASIFarmAnimal {
           mapped_new_fd === undefined ||
           wasi_farm_ref_new === undefined
         ) {
+          console.log("path_link failed", wasi.ERRNO_BADF);
           return wasi.ERRNO_BADF;
         }
         if (wasi_farm_ref !== wasi_farm_ref_new) {
+          console.log("path_link failed", wasi.ERRNO_BADF);
           return wasi.ERRNO_BADF;
         }
+        console.log("path_link ok?", wasi_farm_ref.path_link);
         const buffer8 = new Uint8Array(self.inst.exports.memory.buffer);
         const old_path = buffer8.slice(
           old_path_ptr,
@@ -1082,6 +1098,7 @@ export class WASIFarmAnimal {
           new_path_ptr,
           new_path_ptr + new_path_len,
         );
+        console.log("path_link", mapped_old_fd, old_flags, old_path, new_path);
         return wasi_farm_ref.path_link(
           mapped_old_fd,
           old_flags,
@@ -1467,5 +1484,146 @@ export class WASIFarmAnimal {
         },
       };
     }
+  }
+
+  wasm_run(path: string, args: string[]): boolean {
+    const data = this.get_data(path);
+    const hex = uint8ArrayToBase64(data);
+    console.log("hex", hex);
+    const ret = this.thread_spawner.wasm_run(hex, args, false);
+    return ret;
+  }
+
+  get_data(path__: string): Uint8Array {
+    // path is absolute
+    let path = path__;
+    if (!path.startsWith("/")) {
+      path = `/${path}`;
+    }
+
+    // first: get opened fd dir name
+    let root_fd: number;
+    const dir_names: Map<number, string> = new Map();
+    for (let fd = 0; fd < this.fd_map.length; fd++) {
+      const [mapped_fd, wasi_farm_ref] = this.get_fd_and_wasi_ref(fd);
+      if (mapped_fd === undefined || wasi_farm_ref === undefined) {
+        continue;
+      }
+      const [prestat, ret] = wasi_farm_ref.fd_prestat_get(mapped_fd);
+      if (ret !== wasi.ERRNO_SUCCESS) {
+        continue;
+      }
+      if (prestat) {
+        const [tag, name_len] = prestat;
+        if (tag === wasi.PREOPENTYPE_DIR) {
+          const [path, ret] = wasi_farm_ref.fd_prestat_dir_name(
+            mapped_fd,
+            name_len,
+          );
+          if (ret !== wasi.ERRNO_SUCCESS) {
+            continue;
+          }
+          if (path) {
+            const decoded_path = new TextDecoder().decode(path);
+            dir_names.set(fd, decoded_path);
+            if (decoded_path === "/") {
+              root_fd = fd;
+            }
+          }
+        }
+      }
+    }
+
+    // second: most match path
+    let matched_fd = root_fd;
+    let matched_dir_len = 1;
+    const parts_path = path.split("/");
+    for (const [fd, dir_name] of dir_names) {
+      const parts_dir_name = dir_name.split("/");
+      let dir_len = 0;
+      for (let i = 0; i < parts_dir_name.length; i++) {
+        if (parts_dir_name[i] === parts_path[i]) {
+          dir_len++;
+        } else {
+          break;
+        }
+      }
+      if (dir_len > matched_dir_len) {
+        matched_fd = fd;
+        matched_dir_len = dir_len;
+      }
+    }
+
+    if (matched_dir_len === 0) {
+      throw new Error("no matched dir");
+    }
+
+    console.log("matched_dir_name", dir_names.get(matched_fd));
+
+    // third: tale the rest of path
+    const rest_path = parts_path.slice(matched_dir_len).join("/");
+    console.log("rest_path", rest_path);
+
+    // fourth: open file
+    const [mapped_fd, wasi_farm_ref_n] = this.get_fd_and_wasi_ref_n(matched_fd);
+    const [opened_fd, ret] = this.wasi_farm_refs[wasi_farm_ref_n].path_open(
+      mapped_fd,
+      0,
+      new TextEncoder().encode(rest_path),
+      0,
+      0n,
+      0n,
+      0,
+    );
+
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const mapped_opened_fd = this.map_new_fd_and_notify(
+      opened_fd,
+      wasi_farm_ref_n,
+    );
+
+    if (ret !== wasi.ERRNO_SUCCESS) {
+      throw new Error("failed to open file");
+    }
+
+    // fifth: read file
+    let file_data: Uint8Array = new Uint8Array();
+    let offset = 0n;
+
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      console.log("offset", offset);
+
+      const iovs = new Uint32Array(2);
+      // buf_ptr so any value
+      iovs[0] = 0;
+      // buf_len
+      iovs[1] = 1024;
+      const [nread_and_buf, ret] = this.wasi_farm_refs[
+        wasi_farm_ref_n
+      ].fd_pread(opened_fd, iovs, offset);
+      if (ret !== wasi.ERRNO_SUCCESS) {
+        throw new Error("failed to read file");
+      }
+      if (!nread_and_buf) {
+        throw new Error("failed to read file");
+      }
+      const [nread, buf] = nread_and_buf;
+      if (nread === 0) {
+        break;
+      }
+      const new_data = new Uint8Array(file_data.length + nread);
+      new_data.set(file_data);
+      new_data.set(buf, file_data.length);
+      file_data = new_data;
+      offset += BigInt(nread);
+      if (nread < 1024) {
+        break;
+      }
+    }
+
+    this.wasi_farm_refs[wasi_farm_ref_n].fd_close(opened_fd);
+
+    return file_data;
   }
 }

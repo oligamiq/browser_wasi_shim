@@ -48,14 +48,39 @@
       super();
       this.term = term;
     }
+    fd_read() {
+      // read 0
+      return { ret: 0, data: new Uint8Array(0) };
+    }
     fd_write(data/*: Uint8Array*/)/*: {ret: number, nwritten: number}*/ {
       let nwritten = 0;
       this.term.writeUtf8(data);
       return { ret: 0, nwritten: data.byteLength };
     }
+    fd_prestat_get() {
+      // wasi.ERRNO_BADF 8
+      return { ret: 8, prestat: null };
+    }
+    fd_fdstat_get() {
+      // wasi.ERRNO_BADF 8
+      return { ret: 8, fdstat: null };
+    }
+    fd_seek() {
+      // wasi.ERRNO_BADF 8
+      return { ret: 8, offset: 0n };
+    }
+    fd_filestat_get() {
+      // wasi.ERRNO_BADF 8
+      return { ret: 8, filestat: null };
+    }
+    fd_close() {
+      // wasi.ERRNO_BADF 8
+      return { ret: 8 };
+    }
   }
 
   const farm = new WASIFarm(
+    // EOF
     new XtermStdio(term),
     new XtermStdio(term),
     new XtermStdio(term),
