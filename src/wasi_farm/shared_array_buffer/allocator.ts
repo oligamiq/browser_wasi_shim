@@ -154,7 +154,7 @@ export class AllocatorUseArrayBuffer {
       // support from es2024
       // this.share_arrays_memory.grow(new_memory_len);
       throw new Error(
-        "size is bigger than memory. \nTODO! fix memory limit. support big size another way.",
+        `size is bigger than memory. TODO! fix memory limit. support big size another way. ${memory_len} < ${new_memory_len} used_buffer: ${share_arrays_memory_kept}`,
       );
     }
 

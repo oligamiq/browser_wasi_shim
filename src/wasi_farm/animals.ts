@@ -1,6 +1,7 @@
 import { debug } from "../debug.js";
 import { type Options, WASIProcExit } from "../wasi.js";
 import * as wasi from "../wasi_defs.js";
+import { uint8ArrayToBase64 } from "./base64.js";
 import type { WASIFarmRef } from "./ref.js";
 import type { WASIFarmRefObject } from "./ref.js";
 import type { FdCloseSender } from "./sender.js";
@@ -16,12 +17,27 @@ export class WASIFarmAnimal {
 
   private id_in_wasi_farm_ref: Array<number>;
 
+  private extend_imports: boolean;
+
   inst: { exports: { memory: WebAssembly.Memory } };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   wasiImport: { [key: string]: (...args: Array<any>) => unknown };
 
   wasiThreadImport: {
     "thread-spawn": (start_arg: number) => number;
+  };
+
+  extendImport: {
+    fetch_open: (
+      url_ptr: number,
+      url_len: number,
+      method_ptr: number,
+      method_len: number,
+      serialized_headers_ptr: number,
+      serialized_headers_len: number,
+      body_ptr: number,
+      body_len: number,
+    ) => number;
   };
 
   private can_array_buffer;
@@ -121,7 +137,12 @@ export class WASIFarmAnimal {
     const view = new Uint8Array(this.get_share_memory().buffer);
     view.fill(0);
 
-    await this.thread_spawner.async_start_on_thread(this.args, this.env);
+    await this.thread_spawner.async_start_on_thread(
+      this.args,
+      this.env,
+      this.extend_imports,
+      this.fd_map,
+    );
 
     const code = await this.thread_spawner.async_wait_done_or_error();
 
@@ -148,7 +169,12 @@ export class WASIFarmAnimal {
 
     console.log("block_start_on_thread: start");
 
-    this.thread_spawner.block_start_on_thread(this.args, this.env);
+    this.thread_spawner.block_start_on_thread(
+      this.args,
+      this.env,
+      this.extend_imports,
+      this.fd_map,
+    );
 
     console.log("block_start_on_thread: wait");
 
@@ -303,9 +329,11 @@ export class WASIFarmAnimal {
     if (rm_fds.length > 0) {
       for (let i = 0; i < this.fd_map.length; i++) {
         const fd_and_wasi_ref_n = this.fd_map[i];
-        if (fd_and_wasi_ref_n === undefined) {
+        // biome-ignore lint/suspicious/noDoubleEquals: <explanation>
+        if (fd_and_wasi_ref_n == undefined) {
           continue;
         }
+        // console.log("fd_and_wasi_ref_n", fd_and_wasi_ref_n);
         const [fd, wasi_ref_n] = fd_and_wasi_ref_n;
         for (const [rm_fd_fd, rm_fd_wasi_ref_n] of rm_fds) {
           if (fd === rm_fd_fd && wasi_ref_n === rm_fd_wasi_ref_n) {
@@ -333,11 +361,15 @@ export class WASIFarmAnimal {
       can_thread_spawn?: boolean;
       thread_spawn_worker_url?: string;
       thread_spawn_wasm?: WebAssembly.Module;
+      extend_imports?: boolean;
+      hand_override_fd_map?: Array<[number, number]>;
     } = {},
     override_fd_maps?: Array<number[]>,
     thread_spawner?: ThreadSpawner,
   ) {
     debug.enable(options.debug);
+
+    this.extend_imports = options.extend_imports || false;
 
     let wasi_farm_refs_tmp: WASIFarmRefObject[];
     if (Array.isArray(wasi_farm_refs)) {
@@ -400,6 +432,9 @@ export class WASIFarmAnimal {
     }
 
     this.mapping_fds(this.wasi_farm_refs, override_fd_maps);
+    if (options.hand_override_fd_map) {
+      this.fd_map = options.hand_override_fd_map;
+    }
 
     // console.log("this.fd_map", this.fd_map);
 
@@ -557,6 +592,7 @@ export class WASIFarmAnimal {
         return wasi_farm_ref.fd_allocate(mapped_fd, offset, len);
       },
       fd_close(fd: number) {
+        console.log("## fd_close", fd);
         self.check_fds();
         const [mapped_fd, wasi_farm_ref] = self.get_fd_and_wasi_ref(fd);
         if (mapped_fd === undefined || wasi_farm_ref === undefined) {
@@ -848,26 +884,23 @@ export class WASIFarmAnimal {
       fd_renumber(fd: number, to: number) {
         self.check_fds();
 
-        const [mapped_fd, wasi_farm_ref_n] = self.get_fd_and_wasi_ref_n(fd);
         const [mapped_to, wasi_farm_ref_to] = self.get_fd_and_wasi_ref(to);
 
-        if (
-          mapped_fd === undefined ||
-          wasi_farm_ref_n === undefined ||
-          mapped_to === undefined ||
-          wasi_farm_ref_to === undefined
-        ) {
-          return wasi.ERRNO_BADF;
+        if (mapped_to !== undefined && wasi_farm_ref_to !== undefined) {
+          const ret = wasi_farm_ref_to.fd_close(mapped_to);
+          self.check_fds();
+          if (ret !== wasi.ERRNO_SUCCESS) {
+            return ret;
+          }
         }
 
-        const ret = wasi_farm_ref_to.fd_close(mapped_to);
-        self.check_fds();
-
-        if (ret !== wasi.ERRNO_SUCCESS) {
-          return ret;
+        if (self.fd_map[to]) {
+          throw new Error("fd is already mapped");
         }
 
-        self.map_set_fd_and_notify(mapped_fd, wasi_farm_ref_n, to);
+        self.fd_map[to] = self.fd_map[fd];
+
+        self.fd_map[fd] = undefined;
 
         return wasi.ERRNO_SUCCESS;
       },
@@ -1028,6 +1061,16 @@ export class WASIFarmAnimal {
         new_path_ptr: number,
         new_path_len: number,
       ) {
+        console.log(
+          "call path_link",
+          old_fd,
+          old_flags,
+          old_path_ptr,
+          old_path_len,
+          new_fd,
+          new_path_ptr,
+          new_path_len,
+        );
         self.check_fds();
         const [mapped_old_fd, wasi_farm_ref] = self.get_fd_and_wasi_ref(old_fd);
         const [mapped_new_fd, wasi_farm_ref_new] =
@@ -1038,11 +1081,14 @@ export class WASIFarmAnimal {
           mapped_new_fd === undefined ||
           wasi_farm_ref_new === undefined
         ) {
+          console.log("path_link failed", wasi.ERRNO_BADF);
           return wasi.ERRNO_BADF;
         }
         if (wasi_farm_ref !== wasi_farm_ref_new) {
+          console.log("path_link failed", wasi.ERRNO_BADF);
           return wasi.ERRNO_BADF;
         }
+        console.log("path_link ok?", wasi_farm_ref.path_link);
         const buffer8 = new Uint8Array(self.inst.exports.memory.buffer);
         const old_path = buffer8.slice(
           old_path_ptr,
@@ -1052,6 +1098,7 @@ export class WASIFarmAnimal {
           new_path_ptr,
           new_path_ptr + new_path_len,
         );
+        console.log("path_link", mapped_old_fd, old_flags, old_path, new_path);
         return wasi_farm_ref.path_link(
           mapped_old_fd,
           old_flags,
@@ -1147,7 +1194,12 @@ export class WASIFarmAnimal {
         new_path_ptr: number,
         new_path_len: number,
       ) {
+        if (old_fd === new_fd) {
+          return wasi.ERRNO_SUCCESS;
+        }
+        console.log("path_rename", old_fd, new_fd);
         self.check_fds();
+        console.log("path_rename", old_fd, new_fd);
         const [mapped_old_fd, wasi_farm_ref] = self.get_fd_and_wasi_ref(old_fd);
         const [mapped_new_fd, wasi_farm_ref_new] =
           self.get_fd_and_wasi_ref(new_fd);
@@ -1280,10 +1332,298 @@ export class WASIFarmAnimal {
           self.args,
           self.env,
           self.fd_map,
+          self.extend_imports,
         );
 
         return thread_id;
       },
     };
+
+    if (this.extend_imports) {
+      this.extendImport = {
+        fetch_open: (
+          // i32
+          url_ptr: number,
+          // i32
+          url_len: number,
+          // i32
+          method_ptr: number,
+          // i32
+          method_len: number,
+          // i32
+          serialized_headers_ptr: number,
+          // i32
+          serialized_headers_len: number,
+          // i32
+          body_ptr: number,
+          // i32
+          body_len: number,
+          // fd
+        ): number => {
+          console.log("fetch_open", url_ptr, url_len, method_ptr, method_len);
+
+          const buffer8 = new Uint8Array(self.inst.exports.memory.buffer);
+
+          const url_buf = buffer8.slice(url_ptr, url_ptr + url_len);
+          const method_buf = buffer8.slice(method_ptr, method_ptr + method_len);
+          const serialized_headers_buf = buffer8.slice(
+            serialized_headers_ptr,
+            serialized_headers_ptr + serialized_headers_len,
+          );
+          const body_buf = buffer8.slice(body_ptr, body_ptr + body_len);
+
+          const url = new TextDecoder().decode(url_buf);
+          const method = new TextDecoder().decode(method_buf);
+          const serialized_headers_txt = new TextDecoder().decode(
+            serialized_headers_buf,
+          );
+          const body = new TextDecoder().decode(body_buf);
+          console.log("fetch_open", url, method, serialized_headers_txt, body);
+          const serialized_headers = JSON.parse(serialized_headers_txt);
+          console.log("fetch_open", serialized_headers);
+
+          const request = new XMLHttpRequest();
+          // `false` makes the request synchronous
+          request.open(method, url, false);
+          request.timeout = 10000;
+
+          for (const [key, value] of Object.entries(serialized_headers)) {
+            request.setRequestHeader(key as string, value as string);
+          }
+
+          request.send(body);
+
+          const status = request.status;
+
+          const response_headers_str = request.getAllResponseHeaders();
+
+          console.log("fetch_open", status, response_headers_str);
+
+          // Vec<(String, String)>
+          const response_headers: Array<[string, string]> = [];
+
+          for (const line of response_headers_str.split("\r\n")) {
+            if (line === "") {
+              continue;
+            }
+            const [key, value] = line.split(": ");
+            response_headers.push([key, value]);
+          }
+
+          const response_body = request.response;
+
+          let response_body_u8: Uint8Array;
+
+          console.log(
+            "fetch_open",
+            status,
+            response_headers,
+            response_body,
+            request.responseType,
+          );
+
+          switch (request.responseType) {
+            case "arraybuffer":
+              response_body_u8 = new Uint8Array(response_body);
+              break;
+            case "text":
+              response_body_u8 = new TextEncoder().encode(
+                response_body as string,
+              );
+              break;
+            default:
+              throw new Error(
+                `unsupported response type: ${request.responseType}`,
+              );
+          }
+
+          const response_headers_u8 = new TextEncoder().encode(
+            JSON.stringify(response_headers),
+          );
+
+          // first byte is status le_bytes i32
+          // second byte is headers byte length i32
+          const ret_bytes: ArrayBuffer = new ArrayBuffer(
+            2 + response_headers_u8.length + response_body_u8.length,
+          );
+
+          const ret_bytes32 = new DataView(ret_bytes);
+          ret_bytes32.setInt32(0, status, true);
+          ret_bytes32.setInt32(4, response_headers_u8.length, true);
+
+          const ret_bytes8 = new Uint8Array(ret_bytes);
+          ret_bytes8.set(response_headers_u8, 8);
+          ret_bytes8.set(response_body_u8, 8 + response_headers_u8.length);
+
+          // open fd on first wasi_ref
+          // lock input fd and call create_fd on it
+          self.check_fds();
+          const [mapped_fd, wasi_farm_ref_n] = self.get_fd_and_wasi_ref_n(0);
+          if (mapped_fd === undefined || wasi_farm_ref_n === undefined) {
+            throw new Error("fetch_open: bad fd");
+          }
+          const wasi_farm_ref = self.wasi_farm_refs[wasi_farm_ref_n];
+          const [opened_fd, ret] = wasi_farm_ref.open_fd_with_buff(
+            mapped_fd,
+            ret_bytes8,
+          );
+          if (ret !== wasi.ERRNO_SUCCESS) {
+            throw new Error("fetch_open: failed to open fd");
+          }
+          if (opened_fd) {
+            if (self.fd_map.includes([opened_fd, wasi_farm_ref_n])) {
+              throw new Error("opened_fd already exists");
+            }
+            const mapped_opened_fd = self.map_new_fd_and_notify(
+              opened_fd,
+              wasi_farm_ref_n,
+            );
+            return mapped_opened_fd;
+          }
+          throw new Error("fetch_open: failed to open fd");
+        },
+      };
+    }
+  }
+
+  wasm_run(path: string, args: string[]): boolean {
+    const data = this.get_data(path);
+    const hex = uint8ArrayToBase64(data);
+    console.log("hex", hex);
+    const ret = this.thread_spawner.wasm_run(hex, args, false);
+    return ret;
+  }
+
+  get_data(path__: string): Uint8Array {
+    // path is absolute
+    let path = path__;
+    if (!path.startsWith("/")) {
+      path = `/${path}`;
+    }
+
+    // first: get opened fd dir name
+    let root_fd: number;
+    const dir_names: Map<number, string> = new Map();
+    for (let fd = 0; fd < this.fd_map.length; fd++) {
+      const [mapped_fd, wasi_farm_ref] = this.get_fd_and_wasi_ref(fd);
+      if (mapped_fd === undefined || wasi_farm_ref === undefined) {
+        continue;
+      }
+      const [prestat, ret] = wasi_farm_ref.fd_prestat_get(mapped_fd);
+      if (ret !== wasi.ERRNO_SUCCESS) {
+        continue;
+      }
+      if (prestat) {
+        const [tag, name_len] = prestat;
+        if (tag === wasi.PREOPENTYPE_DIR) {
+          const [path, ret] = wasi_farm_ref.fd_prestat_dir_name(
+            mapped_fd,
+            name_len,
+          );
+          if (ret !== wasi.ERRNO_SUCCESS) {
+            continue;
+          }
+          if (path) {
+            const decoded_path = new TextDecoder().decode(path);
+            dir_names.set(fd, decoded_path);
+            if (decoded_path === "/") {
+              root_fd = fd;
+            }
+          }
+        }
+      }
+    }
+
+    // second: most match path
+    let matched_fd = root_fd;
+    let matched_dir_len = 1;
+    const parts_path = path.split("/");
+    for (const [fd, dir_name] of dir_names) {
+      const parts_dir_name = dir_name.split("/");
+      let dir_len = 0;
+      for (let i = 0; i < parts_dir_name.length; i++) {
+        if (parts_dir_name[i] === parts_path[i]) {
+          dir_len++;
+        } else {
+          break;
+        }
+      }
+      if (dir_len > matched_dir_len) {
+        matched_fd = fd;
+        matched_dir_len = dir_len;
+      }
+    }
+
+    if (matched_dir_len === 0) {
+      throw new Error("no matched dir");
+    }
+
+    console.log("matched_dir_name", dir_names.get(matched_fd));
+
+    // third: tale the rest of path
+    const rest_path = parts_path.slice(matched_dir_len).join("/");
+    console.log("rest_path", rest_path);
+
+    // fourth: open file
+    const [mapped_fd, wasi_farm_ref_n] = this.get_fd_and_wasi_ref_n(matched_fd);
+    const [opened_fd, ret] = this.wasi_farm_refs[wasi_farm_ref_n].path_open(
+      mapped_fd,
+      0,
+      new TextEncoder().encode(rest_path),
+      0,
+      0n,
+      0n,
+      0,
+    );
+
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const mapped_opened_fd = this.map_new_fd_and_notify(
+      opened_fd,
+      wasi_farm_ref_n,
+    );
+
+    if (ret !== wasi.ERRNO_SUCCESS) {
+      throw new Error("failed to open file");
+    }
+
+    // fifth: read file
+    let file_data: Uint8Array = new Uint8Array();
+    let offset = 0n;
+
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      console.log("offset", offset);
+
+      const iovs = new Uint32Array(2);
+      // buf_ptr so any value
+      iovs[0] = 0;
+      // buf_len
+      iovs[1] = 1024;
+      const [nread_and_buf, ret] = this.wasi_farm_refs[
+        wasi_farm_ref_n
+      ].fd_pread(opened_fd, iovs, offset);
+      if (ret !== wasi.ERRNO_SUCCESS) {
+        throw new Error("failed to read file");
+      }
+      if (!nread_and_buf) {
+        throw new Error("failed to read file");
+      }
+      const [nread, buf] = nread_and_buf;
+      if (nread === 0) {
+        break;
+      }
+      const new_data = new Uint8Array(file_data.length + nread);
+      new_data.set(file_data);
+      new_data.set(buf, file_data.length);
+      file_data = new_data;
+      offset += BigInt(nread);
+      if (nread < 1024) {
+        break;
+      }
+    }
+
+    this.wasi_farm_refs[wasi_farm_ref_n].fd_close(opened_fd);
+
+    return file_data;
   }
 }

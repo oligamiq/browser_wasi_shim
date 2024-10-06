@@ -174,7 +174,11 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
   }
 
   private lock_double_fd(fd1: number, fd2: number) {
-    // console.log("lock_double_fd", fd1, fd2);
+    console.log("lock_double_fd", fd1, fd2);
+    if (fd1 === fd2) {
+      this.lock_fd(fd1);
+      return;
+    }
     const view = new Int32Array(this.lock_fds);
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -213,6 +217,10 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
 
   private release_double_fd(fd1: number, fd2: number) {
     // console.log("release_double_fd", fd1, fd2);
+    if (fd1 === fd2) {
+      this.release_fd(fd1);
+      return;
+    }
     const view = new Int32Array(this.lock_fds);
     Atomics.store(view, fd1 * 3, 0);
     Atomics.notify(view, fd1 * 3, 1);
@@ -1145,6 +1153,8 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     new_fd: number,
     new_path: Uint8Array,
   ): number {
+    console.log("path_link", old_fd, old_flags, old_path, new_fd, new_path);
+
     this.lock_double_fd(old_fd, new_fd);
 
     const bytes_offset = old_fd * fd_func_sig_bytes;
@@ -1399,5 +1409,39 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     this.release_fd(fd);
 
     return error;
+  }
+
+  open_fd_with_buff(fd: number, buf: Uint8Array): [number, number] {
+    this.lock_fd(fd);
+
+    const bytes_offset = fd * fd_func_sig_bytes;
+    const func_sig_view_u32 = new Uint32Array(this.fd_func_sig, bytes_offset);
+
+    Atomics.store(func_sig_view_u32, 0, 38);
+    Atomics.store(func_sig_view_u32, 1, fd);
+
+    const [ptr, len] = this.allocator.block_write(
+      buf,
+      this.fd_func_sig,
+      fd * fd_func_sig_u32_size + 2,
+    );
+
+    if (!this.call_fd_func(fd)) {
+      this.allocator.free(ptr, len);
+      this.release_fd(fd);
+      return [undefined, wasi.ERRNO_BADF];
+    }
+
+    const error = this.get_error(fd);
+
+    if (error === wasi.ERRNO_SUCCESS) {
+      const new_fd = Atomics.load(func_sig_view_u32, 0);
+      this.release_fd(fd);
+      return [new_fd, error];
+    }
+
+    this.release_fd(fd);
+
+    return [undefined, error];
   }
 }

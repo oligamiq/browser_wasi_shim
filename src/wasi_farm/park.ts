@@ -1,5 +1,6 @@
 import { debug } from "../debug.js";
 import type { Fd } from "../fd.js";
+import { File, OpenFile } from "../fs_mem.js";
 import * as wasi from "../wasi_defs.js";
 import type { WASIFarmRefObject } from "./ref.js";
 
@@ -495,6 +496,11 @@ export abstract class WASIFarmPark {
         fs_rights_inheriting,
         fs_flags,
       );
+      console.log("path_open: park: ", path, "fd_obj", fd_obj, "ret", ret);
+
+      // print self dir path
+      console.log("path_open: self: ", this.fds[fd]);
+
       // console.log("path_open: park: ", ret, fd_obj);
       if (ret !== wasi.ERRNO_SUCCESS) {
         return [undefined, ret];
@@ -505,6 +511,8 @@ export abstract class WASIFarmPark {
       // console.log("path_open: park: ", path, "opened_fd" ,opened_fd);
 
       this.fds[opened_fd] = fd_obj;
+
+      console.log("path_open: park: ", path, "opened_fd", opened_fd);
 
       await resolve();
 
@@ -571,10 +579,11 @@ export abstract class WASIFarmPark {
     return wasi.ERRNO_BADF;
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   protected path_symlink(
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     old_path: string,
     fd: number,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     new_path: string,
   ): number {
     if (this.fds[fd] !== undefined) {
@@ -588,5 +597,23 @@ export abstract class WASIFarmPark {
       return this.fds[fd].path_unlink_file(path);
     }
     return wasi.ERRNO_BADF;
+  }
+
+  protected async open_fd_with_buff(
+    fd: number,
+    buf: Uint8Array,
+  ): Promise<[number | undefined, number]> {
+    if (this.fds[fd] !== undefined) {
+      const fd_obj = new OpenFile(new File(buf));
+
+      const [resolve, opened_fd] = await this.get_new_fd();
+
+      this.fds[opened_fd] = fd_obj;
+
+      await resolve();
+
+      return [opened_fd, wasi.ERRNO_SUCCESS];
+    }
+    return [undefined, wasi.ERRNO_BADF];
   }
 }

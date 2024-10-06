@@ -33,7 +33,7 @@ onmessage = async function (e) {
 		// 	wasi_snapshot_preview1: wasi.wasiImport,
 		// });
 		inst = await WebAssembly.instantiate(wasm, {
-			wasi_snapshot_preview1: strace(wasi.wasiImport, []),
+			wasi_snapshot_preview1: wasi.wasiImport,
 		});
 
 		console.log("wasi.start, inst", inst);

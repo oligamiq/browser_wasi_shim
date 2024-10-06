@@ -689,7 +689,12 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
 
             // console.log("allocator", this.allocator);
 
-            // console.log("fd_write: park: write_data", new TextDecoder().decode(data));
+            console.log(
+              "fd_write: park: write_data",
+              "fd: ",
+              fd,
+              new TextDecoder().decode(data),
+            );
 
             const [nwritten, error] = await this.fd_write(fd, data);
 
@@ -776,6 +781,8 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
           }
           // path_link: (old_fd: u32, old_flags: u32, old_path_ptr: pointer, old_path_len: u32, new_fd: u32, new_path_ptr: pointer, new_path_len: u32) => errno;
           case 31: {
+            console.log("path_link");
+
             const old_fd = Atomics.load(func_sig_view_u32, 1);
             const old_flags = Atomics.load(func_sig_view_u32, 2);
             const old_path_ptr = Atomics.load(func_sig_view_u32, 3);
@@ -794,6 +801,13 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
             );
             const new_path_str = new TextDecoder().decode(new_path);
             this.allocator.free(new_path_ptr, new_path_len);
+
+            console.log(
+              "path_link: old_path_str",
+              old_path_str,
+              "new_path_str",
+              new_path_str,
+            );
 
             const error = this.path_link(
               old_fd,
@@ -949,6 +963,25 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
             this.allocator.free(path_ptr, path_len);
 
             set_error(this.path_unlink_file(fd, path_str));
+            break;
+          }
+          // open_fd_with_buff: (fd: u32, buf: pointer, buf_len: u32) => [u32, errno];
+          case 38: {
+            const fd = Atomics.load(func_sig_view_u32, 1);
+            const buf_ptr = Atomics.load(func_sig_view_u32, 2);
+            const buf_len = Atomics.load(func_sig_view_u32, 3);
+
+            const buf = new Uint8Array(
+              this.allocator.get_memory(buf_ptr, buf_len),
+            );
+            this.allocator.free(buf_ptr, buf_len);
+
+            const [opened_fd, error] = await this.open_fd_with_buff(fd, buf);
+
+            if (opened_fd !== undefined) {
+              Atomics.store(func_sig_view_u32, 0, opened_fd);
+            }
+            set_error(error);
             break;
           }
           default: {

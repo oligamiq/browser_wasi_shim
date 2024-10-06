@@ -14,7 +14,9 @@
 
 //  (import "wasi" "thread-spawn" (func $fimport$27 (param i32) (result i32)))
 
+import { strace } from "../../strace.js";
 import { WASIFarmAnimal } from "../animals.js";
+import { base64ToUint8Array } from "../base64.js";
 import type { WASIFarmRefObject } from "../ref.js";
 import type { WorkerBackgroundRefObject } from "./worker_background/index.js";
 import {
@@ -111,8 +113,9 @@ export class ThreadSpawner {
         worker_background_ref_object: this.worker_background_ref_object,
       });
     } else {
+      this.worker_background_ref_object = worker_background_ref_object;
       this.worker_background_ref = WorkerBackgroundRef.init_self(
-        worker_background_ref_object,
+        this.worker_background_ref_object,
       );
     }
   }
@@ -140,7 +143,9 @@ export class ThreadSpawner {
     args: Array<string>,
     env: Array<string>,
     fd_map: Array<[number, number]>,
+    extend_imports: boolean,
   ): number {
+    this.wait_worker_background_worker;
     const worker = this.worker_background_ref.new_worker(
       this.worker_url,
       { type: "module" },
@@ -150,6 +155,7 @@ export class ThreadSpawner {
         args,
         env,
         fd_map,
+        extend_imports,
       },
     );
 
@@ -158,9 +164,31 @@ export class ThreadSpawner {
     return thread_id;
   }
 
+  wasm_run(
+    wasm_buffer_hex: string,
+    args: Array<string>,
+    wasm_run_thread: boolean,
+  ): boolean {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const code = this.worker_background_ref.wasm_run(
+      this.worker_url,
+      { type: "module" },
+      {
+        this_is_wasm_run: true,
+        wasm_buffer_hex,
+        args,
+        wasm_run_thread,
+      },
+    );
+
+    return code;
+  }
+
   async async_start_on_thread(
     args: Array<string>,
     env: Array<string>,
+    extend_imports: boolean,
+    fd_map: Array<[number, number]>,
   ): Promise<void> {
     if (!self.Worker.toString().includes("[native code]")) {
       if (self.Worker.toString().includes("function")) {
@@ -178,11 +206,18 @@ export class ThreadSpawner {
         this_is_start: true,
         args,
         env,
+        extend_imports,
+        fd_map,
       },
     );
   }
 
-  block_start_on_thread(args: Array<string>, env: Array<string>): void {
+  block_start_on_thread(
+    args: Array<string>,
+    env: Array<string>,
+    extend_imports: boolean,
+    fd_map: Array<[number, number]>,
+  ): void {
     if (!self.Worker.toString().includes("[native code]")) {
       if (self.Worker.toString().includes("function")) {
         console.warn("SubWorker(new Worker on Worker) is polyfilled maybe.");
@@ -199,6 +234,8 @@ export class ThreadSpawner {
         this_is_start: true,
         args,
         env,
+        extend_imports,
+        fd_map,
       },
     );
   }
@@ -269,61 +306,72 @@ export class ThreadSpawner {
 
 // send fd_map is not implemented yet.
 // issue: the fd passed to the child process is different from the parent process.
-export const thread_spawn_on_worker = async (msg: {
-  this_is_thread_spawn: boolean;
-  worker_id?: number;
-  start_arg: number;
-  worker_background_ref: WorkerBackgroundRefObject;
-  sl_object: ThreadSpawnerObject;
-  thread_spawn_wasm: WebAssembly.Module;
-  args: Array<string>;
-  env: Array<string>;
-  fd_map: Array<number[]>;
-  this_is_start?: boolean;
-}): Promise<WASIFarmAnimal> => {
-  if (msg.this_is_thread_spawn) {
-    if (msg.this_is_start) {
-      const thread_spawner = ThreadSpawner.init_self_with_worker_background_ref(
-        msg.sl_object,
-        msg.worker_background_ref,
-      );
+export const thread_spawn_on_worker = async (
+  msg: {
+    this_is_thread_spawn: boolean;
+    worker_id?: number;
+    start_arg: number;
+    worker_background_ref: WorkerBackgroundRefObject;
+    sl_object: ThreadSpawnerObject;
+    thread_spawn_wasm: WebAssembly.Module;
+    args: Array<string>;
+    env: Array<string>;
+    fd_map: [number, number][];
+    extend_imports: boolean;
+    this_is_start?: boolean;
+    // For wasm_run
+    this_is_wasm_run?: boolean;
+    wasm_buffer_hex?: string;
+    wasm_run_thread?: boolean;
+    wasm_run_args?: Array<string>;
+  },
+  external_imports: (memory: WebAssembly.Memory) => {
+    [key: string]: { [key: string]: (...args: Array<unknown>) => unknown };
+  } = () => ({}),
+): Promise<WASIFarmAnimal> => {
+  console.log("thread_spawn_on_worker", msg);
 
-      const wasi = new WASIFarmAnimal(
-        msg.sl_object.wasi_farm_refs_object,
-        msg.args,
-        msg.env,
-        {
-          can_thread_spawn: true,
-          thread_spawn_worker_url: msg.sl_object.worker_url,
-        },
-        undefined,
-        thread_spawner,
-      );
+  if (msg.this_is_wasm_run) {
+    if (msg.wasm_run_thread) {
+      throw new Error("Not implemented yet.");
+    }
+    const wasm_buff = base64ToUint8Array(msg.wasm_buffer_hex);
+    const wasm = await WebAssembly.compile(wasm_buff);
 
-      const inst = await WebAssembly.instantiate(msg.thread_spawn_wasm, {
-        env: {
-          memory: wasi.get_share_memory(),
-        },
-        wasi: wasi.wasiThreadImport,
-        wasi_snapshot_preview1: wasi.wasiImport,
-      });
+    const wasi = new WASIFarmAnimal(
+      msg.sl_object.wasi_farm_refs_object,
+      msg.wasm_run_args,
+      [], // env
+      {
+        debug: false,
+      },
+    );
 
+    const inst = await WebAssembly.instantiate(wasm, {
+      wasi_snapshot_preview1: wasi.wasiImport,
+    });
+
+    let is_error = false;
+    try {
       wasi.start(
         inst as unknown as {
-          exports: {
-            memory: WebAssembly.Memory;
-            _start: () => unknown;
-          };
+          exports: { memory: WebAssembly.Memory; _start: () => unknown };
         },
       );
-
-      globalThis.postMessage({
-        msg: "done",
-      });
-
-      return wasi;
+    } catch (e) {
+      console.error(e);
+      is_error = true;
     }
 
+    globalThis.postMessage({
+      msg: "done",
+      is_error,
+    });
+
+    return wasi;
+  }
+
+  if (msg.this_is_thread_spawn) {
     const {
       worker_id: thread_id,
       start_arg,
@@ -332,13 +380,6 @@ export const thread_spawn_on_worker = async (msg: {
       sl_object,
       thread_spawn_wasm,
     } = msg;
-
-    console.log(`thread_spawn worker ${thread_id} start`);
-
-    const thread_spawner = ThreadSpawner.init_self_with_worker_background_ref(
-      sl_object,
-      msg.worker_background_ref,
-    );
 
     const override_fd_map: Array<number[]> = new Array(
       sl_object.wasi_farm_refs_object.length,
@@ -357,6 +398,88 @@ export const thread_spawn_on_worker = async (msg: {
       override_fd_map[wasi_ref_n].push(fd);
     }
 
+    if (msg.this_is_start) {
+      const thread_spawner = ThreadSpawner.init_self_with_worker_background_ref(
+        msg.sl_object,
+        msg.worker_background_ref,
+      );
+
+      const wasi = new WASIFarmAnimal(
+        msg.sl_object.wasi_farm_refs_object,
+        msg.args,
+        msg.env,
+        {
+          can_thread_spawn: true,
+          thread_spawn_worker_url: msg.sl_object.worker_url,
+          extend_imports: msg.extend_imports,
+          hand_override_fd_map: msg.fd_map,
+        },
+        override_fd_map,
+        thread_spawner,
+      );
+
+      const external_imports_ = external_imports(wasi.get_share_memory());
+      console.log("external_imports_", external_imports_);
+
+      const imports: {
+        env: {
+          memory: WebAssembly.Memory;
+        };
+        wasi: {
+          "thread-spawn": (start_arg: number) => number;
+        };
+        wasi_snapshot_preview1: {
+          [key: string]: (...args: Array<unknown>) => unknown;
+        };
+        extend_imports?: {
+          [key: string]: (...args: Array<unknown>) => unknown;
+        };
+      } = {
+        env: {
+          memory: wasi.get_share_memory(),
+        },
+        wasi: wasi.wasiThreadImport,
+        wasi_snapshot_preview1: wasi.wasiImport,
+        ...external_imports_,
+      };
+
+      if (msg.extend_imports) {
+        imports.extend_imports = {
+          ...imports.extend_imports,
+          ...wasi.extendImport,
+        };
+      }
+
+      console.log("imports", imports);
+
+      const inst = await WebAssembly.instantiate(
+        msg.thread_spawn_wasm,
+        imports,
+      );
+
+      wasi.start(
+        inst as unknown as {
+          exports: {
+            memory: WebAssembly.Memory;
+            _start: () => unknown;
+          };
+        },
+      );
+
+      globalThis.postMessage({
+        msg: "done",
+      });
+
+      return wasi;
+    }
+
+    console.log(`thread_spawn worker ${thread_id} start`);
+
+    const thread_spawner = ThreadSpawner.init_self_with_worker_background_ref(
+      sl_object,
+      msg.worker_background_ref,
+    );
+
     const wasi = new WASIFarmAnimal(
       sl_object.wasi_farm_refs_object,
       args,
@@ -364,18 +487,43 @@ export const thread_spawn_on_worker = async (msg: {
       {
         can_thread_spawn: true,
         thread_spawn_worker_url: sl_object.worker_url,
+        extend_imports: msg.extend_imports,
+        hand_override_fd_map: msg.fd_map,
       },
       override_fd_map,
       thread_spawner,
     );
 
-    const inst = await WebAssembly.instantiate(thread_spawn_wasm, {
+    const imports: {
+      env: {
+        memory: WebAssembly.Memory;
+      };
+      wasi: {
+        "thread-spawn": (start_arg: number) => number;
+      };
+      wasi_snapshot_preview1: {
+        [key: string]: (...args: Array<unknown>) => unknown;
+      };
+      extend_imports?: {
+        [key: string]: (...args: Array<unknown>) => unknown;
+      };
+    } = {
       env: {
         memory: wasi.get_share_memory(),
       },
       wasi: wasi.wasiThreadImport,
       wasi_snapshot_preview1: wasi.wasiImport,
-    });
+      ...external_imports(wasi.get_share_memory()),
+    };
+
+    if (msg.extend_imports) {
+      imports.extend_imports = {
+        ...imports.extend_imports,
+        ...wasi.extendImport,
+      };
+    }
+
+    const inst = await WebAssembly.instantiate(thread_spawn_wasm, imports);
 
     globalThis.postMessage({
       msg: "ready",
