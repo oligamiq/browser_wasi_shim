@@ -68,16 +68,7 @@
       "default": "./dist/browser-wasi-shim-threads.es.js"
     }
   },
-  "files": [
-    "dist",
-    "src"
-  ],
+  "files": ["dist", "src"],
   "module": "dist/browser-wasi-shim-threads.es.js",
-  "keywords": [
-    "wasi",
-    "webassembly",
-    "threads",
-    "worker",
-    "webworker"
-  ]
+  "keywords": ["wasi", "webassembly", "threads", "worker", "webworker"]
 }
