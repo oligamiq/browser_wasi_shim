@@ -372,6 +372,29 @@ class WorkerBackground<T> {
 
           break;
         }
+        // terminate all workers
+        case 3: {
+          console.debug("terminate all workers");
+
+          let n = 0;
+          for (const worker of this.workers) {
+            if (worker !== undefined) {
+              worker.terminate();
+              console.debug(`terminate worker ${n}`);
+            }
+            n++;
+          }
+
+          if (this.start_worker !== undefined) {
+            this.start_worker.terminate();
+            console.debug("terminate start worker");
+          }
+
+          this.workers = [undefined];
+          this.start_worker = undefined;
+
+          break;
+        }
       }
 
       Atomics.store(lock_view, 1, 1);

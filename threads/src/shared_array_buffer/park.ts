@@ -4,6 +4,7 @@ import type { FdCloseSender } from "../sender.ts";
 import { AllocatorUseArrayBuffer } from "./allocator.ts";
 import { FdCloseSenderUseArrayBuffer } from "./fd_close_sender.ts";
 import type { WASIFarmRefUseArrayBufferObject } from "./ref.ts";
+import { wrap_async } from "./util.ts";
 
 export const fd_func_sig_u32_size: number = 18;
 export const fd_func_sig_bytes: number = fd_func_sig_u32_size * 4;
@@ -78,7 +79,10 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
   private fds_len_and_num: SharedArrayBuffer;
 
   // listen promise keep
-  private listen_fds: Array<Promise<void>> = [];
+  private listen_fds: Array<Promise<void> | undefined | null> = [];
+
+  // listen_fds terminator
+  private listen_fds_terminator: Array<(() => void) | undefined | null> = [];
 
   // The largest size is u32 * 18 + 1
   // Alignment is troublesome, so make it u32 * 18 + 4
@@ -87,18 +91,21 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
 
   // listen base handle keep
   // @ts-ignore
-  private listen_base_handle!: Promise<void>;
+  private listen_base_handle: Promise<void> | undefined | null;
 
-  // listen base lock and call etc
+  private listen_base_terminator: (() => void) | undefined | null;
+
+  /** listen base lock and call etc */
   private base_func_util: SharedArrayBuffer;
 
-  // tell other processes that the file descriptor has been closed
+  /** tell other processes that the file descriptor has been closed */
   private fd_close_receiver: FdCloseSender;
 
-  // this is not send by postMessage,
-  // so it is not necessary to keep shared_array_buffer
-  // this class is not used by user,
-  // to avoid mistakes, all constructors are now required to be passed in.
+  /** this is not send by postMessage,
+   * so it is not necessary to keep shared_array_buffer
+   * this class is not used by user,
+   * to avoid mistakes, all constructors are now required to be passed in.
+   */
   constructor(
     fds: Array<Fd>,
     // stdin fd number
@@ -136,6 +143,30 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     this.base_func_util = new SharedArrayBuffer(28);
   }
 
+  /**
+   * Destroys the all threads spawned by this Runtime.
+   */
+  destroy_animal(): void {}
+
+  /** Destroy this instance. */
+  destroy() {
+    // stop listen fds
+    for (let n = 0; n < this.fds.length; n++) {
+      const terminator = this.listen_fds_terminator[n];
+      if (terminator) {
+        terminator();
+        this.listen_fds_terminator[n] = null;
+        this.listen_fds[n] = null;
+      }
+    }
+    // stop listen base
+    if (this.listen_base_terminator) {
+      this.listen_base_terminator();
+      this.listen_base_terminator = null;
+      this.listen_base_handle = null;
+    }
+  }
+
   /// Send this return by postMessage.
   get_ref(): WASIFarmRefUseArrayBufferObject {
     return {
@@ -169,7 +200,9 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
         await this.listen_fds[fd];
       }
     }
-    this.listen_fds[fd] = this.listen_fd(fd);
+    const { promise, terminate } = this.listen_fd(fd);
+    this.listen_fds[fd] = promise;
+    this.listen_fds_terminator[fd] = terminate;
 
     const view = new Int32Array(this.fds_len_and_num);
     Atomics.store(view, 0, this.fds.length);
@@ -182,7 +215,8 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
   async notify_rm_fd(fd: number) {
     (async () => {
       await this.listen_fds[fd];
-      (this.listen_fds as Array<Promise<void> | undefined>)[fd] = undefined;
+      this.listen_fds[fd] = undefined;
+      this.listen_fds_terminator[fd] = undefined;
     })();
 
     // console.log("notify_rm_fd", fd);
@@ -213,9 +247,13 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
   listen() {
     this.listen_fds = [];
     for (let n = 0; n < this.fds.length; n++) {
-      this.listen_fds.push(this.listen_fd(n));
+      const { promise, terminate } = this.listen_fd(n);
+      this.listen_fds.push(promise);
+      this.listen_fds_terminator.push(terminate);
     }
-    this.listen_base_handle = this.listen_base();
+    const { promise, terminate } = this.listen_base();
+    this.listen_base_handle = promise;
+    this.listen_base_terminator = terminate;
   }
 
   // listen base
@@ -223,7 +261,11 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
   // if close fd and send to other process,
   // it need targets wasi_farm_ref id
   // so, set fds_map
-  async listen_base() {
+  listen_base(): { promise: Promise<void>; terminate: () => void } {
+    return wrap_async(this.listen_base_inner.bind(this));
+  }
+
+  async listen_base_inner() {
     const lock_view = new Int32Array(this.base_func_util);
     Atomics.store(lock_view, 0, 0);
     Atomics.store(lock_view, 1, 1);
@@ -287,8 +329,15 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     }
   }
 
+  listen_fd(fd_n: number): {
+    promise: Promise<void>;
+    terminate: () => void;
+  } {
+    return wrap_async(this.listen_fd_inner.bind(this, fd_n));
+  }
+
   // listen fd
-  async listen_fd(fd_n: number) {
+  async listen_fd_inner(fd_n: number): Promise<void> {
     const lock_view = new Int32Array(this.lock_fds, fd_n * 12);
     const bytes_offset = fd_n * fd_func_sig_bytes;
     const func_sig_view_u8 = new Uint8Array(this.fd_func_sig, bytes_offset);

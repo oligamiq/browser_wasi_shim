@@ -297,6 +297,15 @@ export class WorkerBackgroundRef {
 
     throw error;
   }
+
+  terminate_all_workers(): void {
+    this.block_lock_base_func();
+    const view = new Int32Array(this.signature_input);
+    Atomics.store(view, 0, 3);
+    this.call_base_func();
+    this.block_wait_base_func();
+    this.release_base_func();
+  }
 }
 
 export class WorkerRef {

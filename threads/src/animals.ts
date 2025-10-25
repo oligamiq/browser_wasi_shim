@@ -370,6 +370,13 @@ export class WASIFarmAnimal {
     return this.thread_spawner.get_share_memory();
   }
 
+  /// Destroys the all threads spawned by this Runtime.
+  destroy() {
+    if (this.thread_spawner) {
+      this.thread_spawner.destroy();
+    }
+  }
+
   constructor(
     wasi_farm_refs: WASIFarmRefObject[] | WASIFarmRefObject,
     args: Array<string>,

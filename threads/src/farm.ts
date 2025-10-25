@@ -5,7 +5,7 @@ import { WASIFarmParkUseArrayBuffer } from "./shared_array_buffer/index.ts";
 
 export class WASIFarm {
   private fds: Array<Fd>;
-  private park: WASIFarmPark;
+  private park: WASIFarmPark | null;
 
   private can_array_buffer: boolean;
 
@@ -113,6 +113,17 @@ export class WASIFarm {
   }
 
   get_ref(): WASIFarmRefObject {
+    if (this.park === null) {
+      throw new Error("WASIFarm is already destroyed");
+    }
+
     return this.park.get_ref();
+  }
+
+  /// Destroys the all threads spawned by this Runtime.
+  destroy_animal() {
+    if (this.park) {
+      this.park.destroy_animal();
+    }
   }
 }

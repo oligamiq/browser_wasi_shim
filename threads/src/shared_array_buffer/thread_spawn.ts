@@ -286,6 +286,15 @@ export class ThreadSpawner {
 
     return this.worker_background_ref.block_wait_done_or_error();
   }
+
+  /// Destroys the all threads spawned by this Runtime.
+  destroy() {
+    if (this.worker_background_worker) {
+      this.worker_background_ref.terminate_all_workers();
+      this.worker_background_worker.terminate();
+      this.worker_background_worker = undefined;
+    }
+  }
 }
 
 /** send fd_map is not implemented yet.
