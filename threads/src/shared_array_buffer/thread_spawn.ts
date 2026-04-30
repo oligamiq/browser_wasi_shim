@@ -322,13 +322,13 @@ export class ThreadSpawner {
     Atomics.store(view, 0, 1);
     // Set notification flag at idx=1
     Atomics.store(view, 1, 1);
-    
+
     this.worker_background_ref.destroy();
-    
+
     // Signal completion
     Atomics.store(view, 0, 0);
     Atomics.notify(view, 0);
-    
+
     if (this.worker_background_worker) {
       this.worker_background_worker = undefined;
     }
