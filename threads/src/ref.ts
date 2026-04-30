@@ -36,6 +36,8 @@ export abstract class WASIFarmRef {
 
   abstract set_id(): number;
 
+  destroy?(): void;
+
   constructor(
     stdin: number | undefined,
     stdout: number | undefined,
@@ -183,4 +185,6 @@ export abstract class WASIFarmRef {
     new_path: Uint8Array,
   ): number;
   abstract path_unlink_file(fd: number | undefined, path: Uint8Array): number;
+
+  destroy_park?(): void;
 }

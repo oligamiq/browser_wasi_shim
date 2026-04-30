@@ -151,6 +151,16 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     this.release_base_func();
   }
 
+  // destroy park on the main thread
+  destroy_park(): void {
+    this.lock_base_func();
+    const view = this.base_func_park_locker();
+    Atomics.store(view, 0, 1);
+    this.call_base_func();
+    this.wait_base_func();
+    this.release_base_func();
+  }
+
   key: number = Math.round(Math.random() * 100);
 
   private lock_fd(fd: number) {

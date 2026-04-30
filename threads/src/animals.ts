@@ -6,6 +6,7 @@ import type { FdCloseSender } from "./sender.ts";
 import { WASIFarmRefUseArrayBuffer } from "./shared_array_buffer/index.ts";
 import type { WASIFarmRefUseArrayBufferObject } from "./shared_array_buffer/index.ts";
 import { ThreadSpawner } from "./shared_array_buffer/index.ts";
+import { DestroyerHandle } from "./destroyer_handle.ts";
 
 export class WASIFarmAnimal {
   args: Array<string>;
@@ -71,11 +72,11 @@ export class WASIFarmAnimal {
   }
 
   /** Start a WASI command
-  When this function is executed, the WebAssembly (Wasm) code runs on that thread.
-  If the Wasm code throws an error or calls process_exit,
-  the main thread would need to be forcibly terminated. However, since this is not possible, if the Wasm code aborts in a child thread, it will be thrown from the worker_background_worker function. By default, this function is hidden. For detailed usage, please refer to the examples/worker_background_worker.ts file.
-  If you are dealing with programs that may abort,
-  consider using async_start_on_thread or block_start_on_thread instead. */
+    When this function is executed, the WebAssembly (Wasm) code runs on that thread.
+    If the Wasm code throws an error or calls process_exit,
+    the main thread would need to be forcibly terminated. However, since this is not possible, if the Wasm code aborts in a child thread, it will be thrown from the worker_background_worker function. By default, this function is hidden. For detailed usage, please refer to the examples/worker_background_worker.ts file.
+    If you are dealing with programs that may abort,
+    consider using async_start_on_thread or block_start_on_thread instead. */
   start(instance: {
     // FIXME v0.3: close opened Fds after execution
     exports: { memory: WebAssembly.Memory; _start: () => unknown };
@@ -117,15 +118,15 @@ export class WASIFarmAnimal {
   }
 
   /** Start a WASI command on a thread.
-    If the module has child threads and one of them throws an error,
-    the main thread should normally also be stopped.
-    However, since there is no way to stop it,
-    the entire worker will be stopped instead.
-    Do not use this if it is not necessary.
-    If you want to use custom imports,
-    pass the optional instantiate function as an argument
-    to the thread_spawn_on_worker function.
-  */
+      If the module has child threads and one of them throws an error,
+      the main thread should normally also be stopped.
+      However, since there is no way to stop it,
+      the entire worker will be stopped instead.
+      Do not use this if it is not necessary.
+      If you want to use custom imports,
+      pass the optional instantiate function as an argument
+      to the thread_spawn_on_worker function.
+    */
   async async_start_on_thread(): Promise<number> {
     if (!this.can_thread_spawn || !this.thread_spawner) {
       throw new Error("thread_spawn is not supported");
@@ -157,15 +158,15 @@ export class WASIFarmAnimal {
   }
 
   /** Start a WASI command on a thread.
-    If the module has child threads and one of them throws an error,
-    the main thread should normally also be stopped.
-    However, since there is no way to stop it,
-    the entire worker will be stopped instead.
-    Do not use this if it is not necessary.
-    If you want to use custom imports,
-    pass the optional instantiate function as an argument
-    to the thread_spawn_on_worker function.
-  */
+      If the module has child threads and one of them throws an error,
+      the main thread should normally also be stopped.
+      However, since there is no way to stop it,
+      the entire worker will be stopped instead.
+      Do not use this if it is not necessary.
+      If you want to use custom imports,
+      pass the optional instantiate function as an argument
+      to the thread_spawn_on_worker function.
+    */
   block_start_on_thread(): number {
     if (!this.can_thread_spawn || !this.thread_spawner) {
       throw new Error("thread_spawn is not supported");
@@ -370,11 +371,66 @@ export class WASIFarmAnimal {
     return this.thread_spawner.get_share_memory();
   }
 
+  /**
+   * DestroyerHandle を生成（スレッド間転送用）
+   *
+   * メインスレッド側で destroy_status を持つ DestroyerHandle を生成。
+   * ワーカースレッド側は init_self で復元し、destroy() で destroy を通知できる。
+   */
+  create_destroyer(): DestroyerHandle {
+    const statuses: SharedArrayBuffer[] = [];
+    for (const ref of this.wasi_farm_refs) {
+      if ('destroy_status' in ref) {
+        // @ts-ignore
+        statuses.push(ref.destroy_status);
+      }
+    }
+    if (this.thread_spawner && 'worker_background_ref_object' in this.thread_spawner) {
+      // @ts-ignore
+      const wbro = this.thread_spawner.worker_background_ref_object;
+      if (wbro && 'destroy_status' in wbro && wbro.destroy_status) {
+        statuses.push(wbro.destroy_status as SharedArrayBuffer);
+      }
+    }
+    
+    const destroyer = new DestroyerHandle(statuses);
+    return destroyer;
+  }
+
   /// Destroys the all threads spawned by this Runtime.
   destroy() {
+    for (const wasi_farm_ref of this.wasi_farm_refs) {
+      if (typeof wasi_farm_ref.destroy === "function") {
+        wasi_farm_ref.destroy();
+      }
+    }
     if (this.thread_spawner) {
       this.thread_spawner.destroy();
     }
+  }
+
+  /// Destroy the n-th WASIFarmPark
+  destroy_park(n: number) {
+    if (n < 0 || n >= this.wasi_farm_refs.length) {
+      throw new Error(`wasi_farm_refs index ${n} is out of bounds.`);
+    }
+    const ref = this.wasi_farm_refs[n];
+    if (typeof ref.destroy_park === "function") {
+      ref.destroy_park();
+    }
+  }
+
+  /// Destroy all WASIFarmParks
+  destroy_park_all() {
+    for (let i = 0; i < this.wasi_farm_refs.length; i++) {
+      this.destroy_park(i);
+    }
+  }
+
+  /// Destroy all WASIFarmParks and all threads
+  destroy_with_park() {
+    this.destroy_park_all();
+    this.destroy();
   }
 
   constructor(
@@ -1412,3 +1468,4 @@ export class WASIFarmAnimal {
     };
   }
 }
+

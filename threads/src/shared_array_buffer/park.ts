@@ -117,7 +117,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     // wasi_farm_ref default allow fds
     default_allow_fds: Array<number>,
     allocator_size?: number,
-    max_fds_len = 128,
+    max_fds_len?: number,
   ) {
     super(fds, stdin, stdout, stderr, default_allow_fds);
 
@@ -129,9 +129,10 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
       );
     }
     // size of int * max_fds_len * 4 (= lock, call, wait)
-    this.lock_fds = new SharedArrayBuffer(4 * max_fds_len * 3);
+    const _max_fds_len = max_fds_len ?? 128;
+    this.lock_fds = new SharedArrayBuffer(4 * _max_fds_len * 3);
     this.fd_func_sig = new SharedArrayBuffer(
-      fd_func_sig_u32_size * 4 * max_fds_len,
+      fd_func_sig_u32_size * 4 * _max_fds_len,
     );
     this.fds_len_and_num = new SharedArrayBuffer(8);
 
@@ -142,11 +143,6 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     this.fd_close_receiver = new FdCloseSenderUseArrayBuffer();
     this.base_func_util = new SharedArrayBuffer(28);
   }
-
-  /**
-   * Destroys the all threads spawned by this Runtime.
-   */
-  destroy_animal(): void {}
 
   /** Destroy this instance. */
   destroy() {
@@ -313,6 +309,15 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
           await new Promise((resolve) => setTimeout(resolve, 1000));
 
           break;
+        }
+        case 1: {
+          // destroy park
+          this.destroy();
+          // notify completion before returning
+          Atomics.store(lock_view, 1, 1);
+          Atomics.store(lock_view, 2, 0);
+          Atomics.notify(lock_view, 2, 1);
+          return;
         }
       }
 

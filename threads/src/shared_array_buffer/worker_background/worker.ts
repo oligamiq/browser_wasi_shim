@@ -21,6 +21,7 @@ class WorkerBackground<T> {
   // 1: call
   private lock: SharedArrayBuffer;
   private signature_input: SharedArrayBuffer;
+  private destroy_status?: SharedArrayBuffer;
 
   // worker_id starts from 1
   private workers: Array<Worker | undefined> = [undefined];
@@ -35,6 +36,7 @@ class WorkerBackground<T> {
     lock?: SharedArrayBuffer,
     allocator?: AllocatorUseArrayBuffer,
     signature_input?: SharedArrayBuffer,
+    destroy_status?: SharedArrayBuffer,
   ) {
     this.override_object = override_object;
     this.lock = lock ?? new SharedArrayBuffer(24);
@@ -42,7 +44,11 @@ class WorkerBackground<T> {
       allocator ??
       new AllocatorUseArrayBuffer(new SharedArrayBuffer(10 * 1024));
     this.signature_input = signature_input ?? new SharedArrayBuffer(24);
+    this.destroy_status = destroy_status;
     this.listen_holder = this.listen();
+    if (this.destroy_status) {
+      this.listen_destroy();
+    }
   }
 
   static init_self<T>(
@@ -54,6 +60,7 @@ class WorkerBackground<T> {
       worker_background_ref_object.lock,
       AllocatorUseArrayBuffer.init_self(worker_background_ref_object.allocator),
       worker_background_ref_object.signature_input,
+      worker_background_ref_object.destroy_status,
     );
   }
 
@@ -72,7 +79,47 @@ class WorkerBackground<T> {
       allocator: this.allocator.get_object(),
       lock: this.lock,
       signature_input: this.signature_input,
+      destroy_status: this.destroy_status,
     };
+  }
+
+  destroy() {
+    let n = 0;
+    for (const worker of this.workers) {
+      if (worker !== undefined) {
+        worker.terminate();
+        console.debug(`terminate worker ${n}`);
+      }
+      n++;
+    }
+
+    if (this.start_worker !== undefined) {
+      this.start_worker.terminate();
+      console.debug("terminate start worker");
+    }
+
+    this.start_worker = undefined;
+  }
+
+  async listen_destroy(): Promise<void> {
+    if (!this.destroy_status) return;
+    const view = new Int32Array(this.destroy_status);
+    while (true) {
+      if (Atomics.load(view, 0) === 1) {
+        this.destroy();
+        setTimeout(() => self.close(), 0);
+        return;
+      }
+      const { value } = Atomics.waitAsync(view, 0, 0);
+      const res = await value;
+      if (res === "ok" || res === "not-equal") {
+        if (Atomics.load(view, 0) === 1) {
+          this.destroy();
+          setTimeout(() => self.close(), 0);
+          return;
+        }
+      }
+    }
   }
 
   async listen(): Promise<void> {
@@ -144,9 +191,14 @@ class WorkerBackground<T> {
             }
 
             if (msg === "error" || msg === "exit") {
-              // biome-ignore lint/style/noNonNullAssertion: <explanation>
-              this.workers[worker_id]!.terminate();
               this.workers[worker_id] = undefined;
+
+              if (this.destroy_status) {
+                const view = new Int32Array(this.destroy_status);
+                if (Atomics.compareExchange(view, 0, 0, 1) === 0) {
+                  Atomics.notify(view, 0);
+                }
+              }
 
               let n = 0;
               for (const worker of this.workers) {
@@ -264,6 +316,13 @@ class WorkerBackground<T> {
               // biome-ignore lint/style/noNonNullAssertion: <explanation>
               this.start_worker!.terminate();
               this.start_worker = undefined;
+
+              if (this.destroy_status) {
+                const view = new Int32Array(this.destroy_status);
+                if (Atomics.compareExchange(view, 0, 0, 1) === 0) {
+                  Atomics.notify(view, 0);
+                }
+              }
 
               const notify_view = new Int32Array(this.lock, 12);
 
@@ -407,7 +466,6 @@ class WorkerBackground<T> {
   }
 }
 
-// @ts-ignore
 let worker_background: WorkerBackground<unknown>;
 
 globalThis.onmessage = (e: MessageEvent) => {

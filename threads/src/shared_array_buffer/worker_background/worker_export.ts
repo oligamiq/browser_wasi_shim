@@ -4,6 +4,7 @@ export type WorkerBackgroundRefObject = {
   allocator: AllocatorUseArrayBufferObject;
   lock: SharedArrayBuffer;
   signature_input: SharedArrayBuffer;
+  destroy_status?: SharedArrayBuffer;
 };
 
 export const WorkerBackgroundRefObjectConstructor =
@@ -14,6 +15,7 @@ export const WorkerBackgroundRefObjectConstructor =
       },
       lock: new SharedArrayBuffer(24),
       signature_input: new SharedArrayBuffer(24),
+      destroy_status: new SharedArrayBuffer(4),
     };
   };
 

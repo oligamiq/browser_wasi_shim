@@ -65,13 +65,6 @@ export class WASIFarm {
       }
     }
 
-    // Check Atomics.waitAsync support
-    if (typeof Atomics.waitAsync !== "function") {
-      throw new Error(
-        "Atomics.waitAsync is not supported. Please use a polyfill.",
-      );
-    }
-
     if (this.can_array_buffer) {
       this.park = new WASIFarmParkUseArrayBuffer(
         this.fds_ref(),
@@ -120,10 +113,11 @@ export class WASIFarm {
     return this.park.get_ref();
   }
 
-  /// Destroys the all threads spawned by this Runtime.
-  destroy_animal() {
+  destroy() {
     if (this.park) {
-      this.park.destroy_animal();
+      this.park.destroy();
+      this.park = null;
     }
   }
 }
+

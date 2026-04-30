@@ -7,8 +7,7 @@ export abstract class WASIFarmPark {
   abstract notify_set_fd(fd: number): void;
   abstract notify_rm_fd(fd: number): void;
   abstract can_set_new_fd(fd: number): [boolean, Promise<void> | undefined];
-  /// Destroys the all threads spawned by this Runtime.
-  abstract destroy_animal(): void;
+  abstract destroy(): void;
 
   protected fds: Array<Fd>;
   protected stdin: number | undefined;

@@ -289,9 +289,8 @@ export class ThreadSpawner {
 
   /// Destroys the all threads spawned by this Runtime.
   destroy() {
+    this.worker_background_ref.destroy();
     if (this.worker_background_worker) {
-      this.worker_background_ref.terminate_all_workers();
-      this.worker_background_worker.terminate();
       this.worker_background_worker = undefined;
     }
   }
