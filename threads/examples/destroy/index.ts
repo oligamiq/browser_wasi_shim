@@ -53,7 +53,7 @@ runBtn.addEventListener("click", async () => {
       log("\n✓ Main: destroy() was called by worker.ts");
       log("✓ Main: All threads should now be terminated");
       log("✓ Main: Check console - thread output should have stopped\n");
-      
+
       wasi_farm.destroy(); // Terminate WASIFarmPark on the main thread
 
       setTimeout(() => {

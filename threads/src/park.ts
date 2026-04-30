@@ -7,7 +7,6 @@ export abstract class WASIFarmPark {
   abstract notify_set_fd(fd: number): void;
   abstract notify_rm_fd(fd: number): void;
   abstract can_set_new_fd(fd: number): [boolean, Promise<void> | undefined];
-  abstract destroy(): void;
 
   protected fds: Array<Fd>;
   protected stdin: number | undefined;
@@ -34,7 +33,7 @@ export abstract class WASIFarmPark {
     // console.log("first fds_map", this.fds_map);
   }
 
-  private get_new_fd_lock = new Array<() => Promise<void>>();
+  private get_new_fd_lock = [] as (() => Promise<void>)[];
 
   // Indicates whether the given id currently has access to the fd.
   protected fds_map: Array<number[]>;
@@ -405,7 +404,7 @@ export abstract class WASIFarmPark {
       let ret: number;
       let nwritten: number;
       if (fd_ret instanceof Promise) {
-        // @ts-ignore
+        // @ts-expect-error
         ({ ret, nwritten } = await fd_ret);
       } else {
         ({ ret, nwritten } = fd_ret);

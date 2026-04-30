@@ -16,11 +16,12 @@
 
 import { WASIProcExit } from "@bjorn3/browser_wasi_shim";
 import { WASIFarmAnimal } from "../animals.ts";
+import { DestroyerHandle } from "../index.ts";
 import type { WASIFarmRefObject } from "../ref.ts";
 import type { WorkerBackgroundRefObject } from "./worker_background/index.ts";
 import {
-  WorkerBackgroundRef,
   gen_worker_background_worker_url,
+  WorkerBackgroundRef,
 } from "./worker_background/index.ts";
 import { WorkerBackgroundRefObjectConstructor } from "./worker_background/worker_export.ts";
 
@@ -31,6 +32,8 @@ type ThreadSpawnerObject = {
   wasi_farm_refs_object: Array<WASIFarmRefObject>;
   worker_url: string;
   worker_background_ref_object: WorkerBackgroundRefObject;
+  destroy_status: SharedArrayBuffer;
+  animal_id_counter: SharedArrayBuffer;
   // inst_default_buffer_kept: WebAssembly.Memory;
 };
 
@@ -42,6 +45,10 @@ export class ThreadSpawner {
   private worker_url: string;
   private worker_background_ref: WorkerBackgroundRef;
   private worker_background_ref_object: WorkerBackgroundRefObject;
+
+  private destroy_status: SharedArrayBuffer;
+  private animal_id_counter: SharedArrayBuffer;
+
   // inst_default_buffer_kept: WebAssembly.Memory;
 
   // hold the worker to prevent GC.
@@ -63,9 +70,14 @@ export class ThreadSpawner {
     thread_spawn_wasm?: WebAssembly.Module,
     // inst_default_buffer_kept?: WebAssembly.Memory,
     worker_background_worker_url?: string,
+    destroy_status?: SharedArrayBuffer,
+    animal_id_counter?: SharedArrayBuffer,
   ) {
     this.worker_url = worker_url;
     this.wasi_farm_refs_object = wasi_farm_refs_object;
+
+    this.destroy_status = destroy_status ?? new SharedArrayBuffer(8);
+    this.animal_id_counter = animal_id_counter ?? new SharedArrayBuffer(4);
 
     if (share_memory === undefined) {
       const min_initial_size = 1048576 / 65536; // Rust's default stack size is 1MB.
@@ -170,6 +182,16 @@ export class ThreadSpawner {
     return thread_id;
   }
 
+  create_destroyer(): DestroyerHandle {
+    return new DestroyerHandle(this.worker_background_ref, this.destroy_status);
+  }
+
+  /// This is atomic
+  generate_animal_id(): number {
+    const buffer = new Int32Array(this.animal_id_counter);
+    return Atomics.add(buffer, 0, 1);
+  }
+
   async async_start_on_thread(
     args: Array<string>,
     env: Array<string>,
@@ -229,8 +251,10 @@ export class ThreadSpawner {
       sl.share_memory,
       undefined,
       sl.worker_background_ref_object,
-      // undefined,
-      // sl.inst_default_buffer_kept,
+      undefined,
+      undefined,
+      sl.destroy_status,
+      sl.animal_id_counter,
     );
     return thread_spawner;
   }
@@ -245,8 +269,10 @@ export class ThreadSpawner {
       sl.share_memory,
       undefined,
       worker_background_ref_object,
-      // undefined,
-      // sl.inst_default_buffer_kept,
+      undefined,
+      undefined,
+      sl.destroy_status,
+      sl.animal_id_counter,
     );
     return thread_spawner;
   }
@@ -263,6 +289,8 @@ export class ThreadSpawner {
       wasi_farm_refs_object: this.wasi_farm_refs_object,
       worker_url: this.worker_url,
       worker_background_ref_object: this.worker_background_ref_object,
+      destroy_status: this.destroy_status,
+      animal_id_counter: this.animal_id_counter,
       // inst_default_buffer_kept: this.inst_default_buffer_kept,
     };
   }
@@ -289,10 +317,25 @@ export class ThreadSpawner {
 
   /// Destroys the all threads spawned by this Runtime.
   destroy() {
+    const view = new Int32Array(this.destroy_status);
+    // Acquire lock at idx=0
+    Atomics.store(view, 0, 1);
+    // Set notification flag at idx=1
+    Atomics.store(view, 1, 1);
+    
     this.worker_background_ref.destroy();
+    
+    // Signal completion
+    Atomics.store(view, 0, 0);
+    Atomics.notify(view, 0);
+    
     if (this.worker_background_worker) {
       this.worker_background_worker = undefined;
     }
+  }
+
+  kill_animal(id: number) {
+    this.worker_background_ref.kill_animal(id);
   }
 }
 
@@ -462,7 +505,7 @@ export const thread_spawn_on_worker = async (
 };
 
 function check_error(e: unknown, thread_id: number | string): void {
-  let e_alt: Error | undefined = undefined;
+  let e_alt: Error | undefined;
 
   if (e instanceof WASIProcExit) {
     globalThis.postMessage({

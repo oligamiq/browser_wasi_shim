@@ -1,54 +1,63 @@
-/**
- * DestroyerHandle: スレッド間で送信可能な destroy オブジェクト
- *
- * 特定の WASIFarmAnimal から destroy を要求できるように設計されています。
- * SharedArrayBuffer 上のフラグのみを使用して実装します。
- *
- * - init_self: ワーカースレッドで初期化
- * - destroy: メインスレッド または 別スレッドから呼び出し可能
- * - destroyされたら自身も死ぬ（状態フラグにより識別）
- */
+import type { WorkerBackgroundRef } from "./shared_array_buffer/worker_background";
 
 export interface DestroyerHandleObject {
-  destroy_statuses: SharedArrayBuffer[];
+  sender: WorkerBackgroundRef;
+  destroy_status: SharedArrayBuffer;
 }
 
 export class DestroyerHandle {
-  private destroy_statuses: SharedArrayBuffer[];
-  private destroyed: boolean = false;
+  private sender: WorkerBackgroundRef;
+  private destroy_status: SharedArrayBuffer;
+  // biome-ignore lint/correctness/noUnusedPrivateClassMembers: <explanation>
+  private listen_holder: Promise<void>;
 
-  constructor(destroy_statuses: SharedArrayBuffer[]) {
-    this.destroy_statuses = destroy_statuses;
+  constructor(sender: WorkerBackgroundRef, destroy_status: SharedArrayBuffer) {
+    this.sender = sender;
+    this.destroy_status = destroy_status;
+    this.listen_holder = this.listen();
   }
 
   static init_self(obj: DestroyerHandleObject): DestroyerHandle {
-    return new DestroyerHandle(obj.destroy_statuses);
+    return new DestroyerHandle(obj.sender, obj.destroy_status);
   }
 
   get_object(): DestroyerHandleObject {
     return {
-      destroy_statuses: this.destroy_statuses,
+      destroy_status: this.destroy_status,
+      sender: this.sender,
     };
   }
 
-  destroy(): void {
-    if (this.destroyed) {
-      return;
+  async listen(): Promise<void> {
+    const view = new Int32Array(this.destroy_status);
+    // idx=0: lock flag (0-based indexing)
+    const { value } = Atomics.waitAsync(view, 0, 1);
+    if ((await value) === "timed-out") {
+      throw new Error("destroy listen timed out");
     }
 
-    for (const destroy_status of this.destroy_statuses) {
-      const view = new Int32Array(destroy_status);
-      const old_value = Atomics.compareExchange(view, 0, 0, 1);
-      if (old_value === 0) {
-        Atomics.notify(view, 0);
-      }
-    }
-
-    this.destroyed = true;
+    // Cleanup after receiving notification
+    this.cleanup();
   }
 
-  is_destroyed(): boolean {
-    return this.destroyed;
+  private cleanup(): void {
+    // Release all references to allow garbage collection
+    // biome-ignore lint: suspicious/noUnnecessaryTypeAssertion: <explanation>
+    this.destroy_status = null as unknown as SharedArrayBuffer;
+    // biome-ignore lint: suspicious/noUnnecessaryTypeAssertion: <explanation>
+    this.sender = null as unknown as WorkerBackgroundRef;
+  }
+
+  destroy(): void {
+    const view = new Int32Array(this.destroy_status);
+    // Acquire lock at idx=0 (user's idx=1)
+    Atomics.store(view, 0, 1);
+    // Set notification flag at idx=1 (user's idx=2)
+    Atomics.store(view, 1, 1);
+    this.sender.destroy();
+
+    // Signal completion after destroy completes
+    Atomics.store(view, 0, 0);
+    Atomics.notify(view, 0);
   }
 }
-

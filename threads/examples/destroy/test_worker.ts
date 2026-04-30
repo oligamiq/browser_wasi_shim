@@ -27,7 +27,6 @@ self.onmessage = async (e) => {
     };
 
     wasmRunner.postMessage({ wasi_ref, wasi_ref2, wasm_binary: wasmBuffer });
-
   } catch (error) {
     console.error("[TestWorker] Error:", error);
     self.postMessage({ error: String(error) });

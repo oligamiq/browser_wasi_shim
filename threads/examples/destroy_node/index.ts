@@ -7,7 +7,9 @@ import { WASIFarm } from "../../src/index.ts";
 console.log("=== Testing WASIFarmAnimal.destroy() ===\n");
 console.log("Test flow:");
 console.log("1. Create WASIFarm on main thread");
-console.log("2. Worker thread creates WASIFarmAnimal and starts eternal_loop.wasm");
+console.log(
+  "2. Worker thread creates WASIFarmAnimal and starts eternal_loop.wasm",
+);
 console.log("3. Main sends ping_before_destroy → count thread workers");
 console.log("4. Main sends destroy → worker calls wasi.destroy()");
 console.log("5. Main sends ping_after_destroy → count remaining workers\n");
@@ -54,7 +56,7 @@ worker.on("message", async (msg) => {
 
   if (msg.destroyed) {
     console.log("✓ Worker: destroy() completed\n");
-    
+
     farm.destroy(); // Terminate WASIFarmPark on the main thread
 
     // Wait 1 second after destroy
@@ -78,7 +80,9 @@ worker.on("message", async (msg) => {
     console.log("=== TEST SUMMARY ===");
     console.log(`✓ Before destroy():  ${msg.pongs_before_destroy} workers`);
     console.log(`✓ After destroy():   ${remainingThreads} workers`);
-    console.log("✓ TEST PASSED: destroy() successfully terminated all workers\n");
+    console.log(
+      "✓ TEST PASSED: destroy() successfully terminated all workers\n",
+    );
 
     worker.terminate();
     process.exit(0);

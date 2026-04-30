@@ -9,18 +9,15 @@ export class WorkerBackgroundRef {
   private allocator: AllocatorUseArrayBuffer;
   private lock: SharedArrayBuffer;
   private signature_input: SharedArrayBuffer;
-  private destroy_status?: SharedArrayBuffer;
 
   constructor(
     allocator: AllocatorUseArrayBuffer,
     lock: SharedArrayBuffer,
     signature_input: SharedArrayBuffer,
-    destroy_status?: SharedArrayBuffer,
   ) {
     this.allocator = allocator;
     this.lock = lock;
     this.signature_input = signature_input;
-    this.destroy_status = destroy_status;
   }
 
   private block_lock_base_func(): void {
@@ -155,7 +152,6 @@ export class WorkerBackgroundRef {
       AllocatorUseArrayBuffer.init_self(sl.allocator),
       sl.lock,
       sl.signature_input,
-      sl.destroy_status,
     );
   }
 
@@ -312,12 +308,22 @@ export class WorkerBackgroundRef {
   }
 
   destroy(): void {
-    if (this.destroy_status) {
-      const view = new Int32Array(this.destroy_status);
-      if (Atomics.compareExchange(view, 0, 0, 1) === 0) {
-        Atomics.notify(view, 0);
-      }
-    }
+    this.block_lock_base_func();
+    const view = new Int32Array(this.signature_input);
+    Atomics.store(view, 0, 5);
+    this.call_base_func();
+    this.block_wait_base_func();
+    this.release_base_func();
+  }
+
+  kill_animal(id: number): void {
+    this.block_lock_base_func();
+    const view = new Int32Array(this.signature_input);
+    Atomics.store(view, 0, 4);
+    Atomics.store(view, 1, id);
+    this.call_base_func();
+    this.block_wait_base_func();
+    this.release_base_func();
   }
 }
 

@@ -21,22 +21,18 @@ class WorkerBackground<T> {
   // 1: call
   private lock: SharedArrayBuffer;
   private signature_input: SharedArrayBuffer;
-  private destroy_status?: SharedArrayBuffer;
 
   // worker_id starts from 1
   private workers: Array<Worker | undefined> = [undefined];
 
   private start_worker?: Worker;
-
-  // @ts-ignore
-  private listen_holder: Promise<void>;
+  private animal_workers = new Map<number, Worker>();
 
   constructor(
     override_object: T,
     lock?: SharedArrayBuffer,
     allocator?: AllocatorUseArrayBuffer,
     signature_input?: SharedArrayBuffer,
-    destroy_status?: SharedArrayBuffer,
   ) {
     this.override_object = override_object;
     this.lock = lock ?? new SharedArrayBuffer(24);
@@ -44,11 +40,6 @@ class WorkerBackground<T> {
       allocator ??
       new AllocatorUseArrayBuffer(new SharedArrayBuffer(10 * 1024));
     this.signature_input = signature_input ?? new SharedArrayBuffer(24);
-    this.destroy_status = destroy_status;
-    this.listen_holder = this.listen();
-    if (this.destroy_status) {
-      this.listen_destroy();
-    }
   }
 
   static init_self<T>(
@@ -60,7 +51,6 @@ class WorkerBackground<T> {
       worker_background_ref_object.lock,
       AllocatorUseArrayBuffer.init_self(worker_background_ref_object.allocator),
       worker_background_ref_object.signature_input,
-      worker_background_ref_object.destroy_status,
     );
   }
 
@@ -79,7 +69,6 @@ class WorkerBackground<T> {
       allocator: this.allocator.get_object(),
       lock: this.lock,
       signature_input: this.signature_input,
-      destroy_status: this.destroy_status,
     };
   }
 
@@ -99,27 +88,7 @@ class WorkerBackground<T> {
     }
 
     this.start_worker = undefined;
-  }
-
-  async listen_destroy(): Promise<void> {
-    if (!this.destroy_status) return;
-    const view = new Int32Array(this.destroy_status);
-    while (true) {
-      if (Atomics.load(view, 0) === 1) {
-        this.destroy();
-        setTimeout(() => self.close(), 0);
-        return;
-      }
-      const { value } = Atomics.waitAsync(view, 0, 0);
-      const res = await value;
-      if (res === "ok" || res === "not-equal") {
-        if (Atomics.load(view, 0) === 1) {
-          this.destroy();
-          setTimeout(() => self.close(), 0);
-          return;
-        }
-      }
-    }
+    this.animal_workers.clear();
   }
 
   async listen(): Promise<void> {
@@ -176,9 +145,12 @@ class WorkerBackground<T> {
           const { promise, resolve } = Promise.withResolvers<void>();
 
           worker.onmessage = async (e) => {
-            const { msg } = e.data;
+            const { msg, animal_id } = e.data;
 
             if (msg === "ready") {
+              if (animal_id !== undefined) {
+                this.animal_workers.set(animal_id, worker);
+              }
               resolve();
             }
 
@@ -186,18 +158,17 @@ class WorkerBackground<T> {
               // biome-ignore lint/style/noNonNullAssertion: <explanation>
               this.workers[worker_id]!.terminate();
               this.workers[worker_id] = undefined;
+              if (animal_id !== undefined) {
+                this.animal_workers.delete(animal_id);
+              }
 
               console.debug(`worker ${worker_id} done so terminate`);
             }
 
             if (msg === "error" || msg === "exit") {
               this.workers[worker_id] = undefined;
-
-              if (this.destroy_status) {
-                const view = new Int32Array(this.destroy_status);
-                if (Atomics.compareExchange(view, 0, 0, 1) === 0) {
-                  Atomics.notify(view, 0);
-                }
+              if (animal_id !== undefined) {
+                this.animal_workers.delete(animal_id);
               }
 
               let n = 0;
@@ -229,6 +200,7 @@ class WorkerBackground<T> {
 
               this.workers = [undefined];
               this.start_worker = undefined;
+              this.animal_workers.clear();
 
               const notify_view = new Int32Array(this.lock, 12);
               if (msg === "error") {
@@ -301,7 +273,13 @@ class WorkerBackground<T> {
           const obj = gen_obj();
 
           this.start_worker.onmessage = async (e) => {
-            const { msg } = e.data;
+            const { msg, animal_id } = e.data;
+
+            if (msg === "ready") {
+              if (animal_id !== undefined) {
+                this.animal_workers.set(animal_id, this.start_worker as Worker);
+              }
+            }
 
             if (msg === "done") {
               let n = 0;
@@ -316,12 +294,8 @@ class WorkerBackground<T> {
               // biome-ignore lint/style/noNonNullAssertion: <explanation>
               this.start_worker!.terminate();
               this.start_worker = undefined;
-
-              if (this.destroy_status) {
-                const view = new Int32Array(this.destroy_status);
-                if (Atomics.compareExchange(view, 0, 0, 1) === 0) {
-                  Atomics.notify(view, 0);
-                }
+              if (animal_id !== undefined) {
+                this.animal_workers.delete(animal_id);
               }
 
               const notify_view = new Int32Array(this.lock, 12);
@@ -369,6 +343,7 @@ class WorkerBackground<T> {
 
               this.workers = [undefined];
               this.start_worker = undefined;
+              this.animal_workers.clear();
 
               const notify_view = new Int32Array(this.lock, 12);
               if (msg === "error") {
@@ -454,6 +429,27 @@ class WorkerBackground<T> {
 
           break;
         }
+        // kill animal with id
+        case 4: {
+          const animal_id = Atomics.load(signature_input_view, 1);
+          console.debug(`kill animal ${animal_id}`);
+
+          const worker = this.animal_workers.get(animal_id);
+          if (worker !== undefined) {
+            worker.postMessage({ msg: "kill_animal", animal_id });
+            this.animal_workers.delete(animal_id);
+          } else {
+            console.warn(`animal ${animal_id} not found`);
+          }
+
+          break;
+        }
+        // destroy
+        case 5: {
+          console.debug("destroy worker background");
+          this.destroy();
+          break;
+        }
       }
 
       Atomics.store(lock_view, 1, 1);
@@ -466,6 +462,7 @@ class WorkerBackground<T> {
   }
 }
 
+// biome-ignore lint:complexity/noUnusedVariables: <explanation>
 let worker_background: WorkerBackground<unknown>;
 
 globalThis.onmessage = (e: MessageEvent) => {

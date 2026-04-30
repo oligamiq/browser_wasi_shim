@@ -1,5 +1,5 @@
-import type { FdCloseSender } from "./sender.js";
 import type { wasi } from "@bjorn3/browser_wasi_shim";
+import type { FdCloseSender } from "./sender.js";
 
 export type WASIFarmRefObject = {
   stdin: number | undefined;
@@ -35,8 +35,6 @@ export abstract class WASIFarmRef {
   abstract set_park_fds_map(fds: Array<number>): void;
 
   abstract set_id(): number;
-
-  destroy?(): void;
 
   constructor(
     stdin: number | undefined,
@@ -186,5 +184,5 @@ export abstract class WASIFarmRef {
   ): number;
   abstract path_unlink_file(fd: number | undefined, path: Uint8Array): number;
 
-  destroy_park?(): void;
+  abstract destroy_park(): void;
 }

@@ -20,9 +20,9 @@ export class WASIFarm {
     } = {},
   ) {
     const new_fds = [];
-    let stdin_ = undefined;
-    let stdout_ = undefined;
-    let stderr_ = undefined;
+    let stdin_: number | undefined;
+    let stdout_: number | undefined;
+    let stderr_: number | undefined;
     if (stdin) {
       new_fds.push(stdin);
       stdin_ = new_fds.length - 1;
@@ -91,12 +91,12 @@ export class WASIFarm {
             return len;
           };
         }
-        // @ts-ignore
+        // @ts-expect-error
         return this.fds[prop];
       },
 
       set: (_, prop, value) => {
-        // @ts-ignore
+        // @ts-expect-error
         this.fds[prop] = value;
         return true;
       },
@@ -112,12 +112,4 @@ export class WASIFarm {
 
     return this.park.get_ref();
   }
-
-  destroy() {
-    if (this.park) {
-      this.park.destroy();
-      this.park = null;
-    }
-  }
 }
-

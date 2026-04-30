@@ -1,12 +1,12 @@
-import { WASIProcExit } from "@bjorn3/browser_wasi_shim";
-import { wasi } from "@bjorn3/browser_wasi_shim";
-import type { WASIFarmRef } from "./ref.ts";
-import type { WASIFarmRefObject } from "./ref.ts";
+import { WASIProcExit, wasi } from "@bjorn3/browser_wasi_shim";
+import type { DestroyerHandle } from "./destroyer_handle.ts";
+import type { WASIFarmRef, WASIFarmRefObject } from "./ref.ts";
 import type { FdCloseSender } from "./sender.ts";
-import { WASIFarmRefUseArrayBuffer } from "./shared_array_buffer/index.ts";
 import type { WASIFarmRefUseArrayBufferObject } from "./shared_array_buffer/index.ts";
-import { ThreadSpawner } from "./shared_array_buffer/index.ts";
-import { DestroyerHandle } from "./destroyer_handle.ts";
+import {
+  ThreadSpawner,
+  WASIFarmRefUseArrayBuffer,
+} from "./shared_array_buffer/index.ts";
 
 export class WASIFarmAnimal {
   args: Array<string>;
@@ -23,6 +23,8 @@ export class WASIFarmAnimal {
   wasiThreadImport: {
     "thread-spawn": (start_arg: number) => number;
   };
+
+  public animal_id?: number;
 
   private can_array_buffer;
 
@@ -88,7 +90,9 @@ export class WASIFarmAnimal {
 
       if (this.can_thread_spawn) {
         if (!this.thread_spawner) {
-          throw new Error("thread_spawner is not defined");
+          throw new Error(
+            "You should enable thread_spawn to use create_destroyer",
+          );
         }
         this.thread_spawner.done_notify(0);
       }
@@ -319,15 +323,6 @@ export class WASIFarmAnimal {
     return n;
   }
 
-  // @ts-ignore
-  private map_set_fd_and_notify(fd: number, wasi_ref_n: number, index: number) {
-    if (this.fd_map[index] !== undefined) {
-      throw new Error("fd is already mapped");
-    }
-    this.fd_map[index] = [fd, wasi_ref_n];
-    this.wasi_farm_refs[wasi_ref_n].set_park_fds_map([fd]);
-  }
-
   private check_fds() {
     const rm_fds: Array<[number, number]> = [];
     for (let i = 0; i < this.id_in_wasi_farm_ref.length; i++) {
@@ -378,35 +373,23 @@ export class WASIFarmAnimal {
    * ワーカースレッド側は init_self で復元し、destroy() で destroy を通知できる。
    */
   create_destroyer(): DestroyerHandle {
-    const statuses: SharedArrayBuffer[] = [];
-    for (const ref of this.wasi_farm_refs) {
-      if ('destroy_status' in ref) {
-        // @ts-ignore
-        statuses.push(ref.destroy_status);
-      }
+    if (!this.thread_spawner) {
+      throw new Error("You should enable thread_spawn to use create_destroyer");
     }
-    if (this.thread_spawner && 'worker_background_ref_object' in this.thread_spawner) {
-      // @ts-ignore
-      const wbro = this.thread_spawner.worker_background_ref_object;
-      if (wbro && 'destroy_status' in wbro && wbro.destroy_status) {
-        statuses.push(wbro.destroy_status as SharedArrayBuffer);
-      }
-    }
-    
-    const destroyer = new DestroyerHandle(statuses);
-    return destroyer;
+    return this.thread_spawner?.create_destroyer();
   }
 
   /// Destroys the all threads spawned by this Runtime.
   destroy() {
-    for (const wasi_farm_ref of this.wasi_farm_refs) {
-      if (typeof wasi_farm_ref.destroy === "function") {
-        wasi_farm_ref.destroy();
-      }
-    }
     if (this.thread_spawner) {
       this.thread_spawner.destroy();
     }
+
+    this.inst = undefined;
+    this.wasi_farm_refs = [];
+    this.id_in_wasi_farm_ref = [];
+    this.fd_map = [];
+    this.thread_spawner = undefined;
   }
 
   /// Destroy the n-th WASIFarmPark
@@ -431,6 +414,11 @@ export class WASIFarmAnimal {
   destroy_with_park() {
     this.destroy_park_all();
     this.destroy();
+  }
+
+  /// Kill the Animal with the given ID on another thread
+  kill_animal(id: number) {
+    this.thread_spawner?.kill_animal(id);
   }
 
   constructor(
@@ -509,6 +497,7 @@ export class WASIFarmAnimal {
           options.worker_background_worker_url,
         );
       }
+      this.animal_id = this.thread_spawner.generate_animal_id();
     }
 
     this.mapping_fds(this.wasi_farm_refs, override_fd_maps);
@@ -611,11 +600,7 @@ export class WASIFarmAnimal {
         // biome-ignore lint/style/noNonNullAssertion: <explanation>
         const buffer = new DataView(self.inst!.exports.memory.buffer);
         if (id === wasi.CLOCKID_REALTIME) {
-          buffer.setBigUint64(
-            time,
-            BigInt(new Date().getTime()) * 1_000_000n,
-            true,
-          );
+          buffer.setBigUint64(time, BigInt(Date.now()) * 1_000_000n, true);
         } else if (id === wasi.CLOCKID_MONOTONIC) {
           let monotonic_time: bigint;
           try {
@@ -1357,7 +1342,7 @@ export class WASIFarmAnimal {
         }
 
         // Read a subscription from the in buffer
-        const buffer = new DataView(self.inst!.exports.memory.buffer);
+        const buffer = new DataView(self.inst?.exports.memory.buffer);
         const s = wasi.Subscription.read_bytes(buffer, in_ptr);
         const eventtype = s.eventtype;
         const clockid = s.clockid;
@@ -1369,11 +1354,11 @@ export class WASIFarmAnimal {
         }
 
         // Select timer
-        let getNow: (() => bigint) | undefined = undefined;
+        let getNow: (() => bigint) | undefined;
         if (clockid === wasi.CLOCKID_MONOTONIC) {
           getNow = () => BigInt(Math.round(performance.now() * 1_000_000));
         } else if (clockid === wasi.CLOCKID_REALTIME) {
-          getNow = () => BigInt(new Date().getTime()) * 1_000_000n;
+          getNow = () => BigInt(Date.now()) * 1_000_000n;
         } else {
           return wasi.ERRNO_INVAL;
         }
@@ -1468,4 +1453,3 @@ export class WASIFarmAnimal {
     };
   }
 }
-
