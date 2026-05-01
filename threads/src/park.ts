@@ -1,6 +1,11 @@
 import { type Fd, wasi } from "@bjorn3/browser_wasi_shim";
 import type { WASIFarmRefObject } from "./ref.js";
 
+/**
+ * WASIFarmPark is an abstract base class for managing the state of a virtualized WASI environment.
+ *
+ * It serves as the bridge between system calls (park) and actual file descriptor operations (fds).
+ */
 export abstract class WASIFarmPark {
   abstract get_ref(): WASIFarmRefObject;
   abstract listen(): void;
@@ -14,6 +19,15 @@ export abstract class WASIFarmPark {
   protected stderr: number | undefined;
   protected default_allow_fds: Array<number>;
 
+  /**
+   * Initializes a new WASIFarmPark.
+   *
+   * @param fds The initial array of file descriptors.
+   * @param stdin The standard input FD index.
+   * @param stdout The standard output FD index.
+   * @param stderr The standard error FD index.
+   * @param default_allow_fds The list of FDs initially allowed for access.
+   */
   constructor(
     fds: Array<Fd>,
     stdin: number | undefined,
@@ -33,15 +47,23 @@ export abstract class WASIFarmPark {
     // console.log("first fds_map", this.fds_map);
   }
 
-  private get_new_fd_lock = new Array<() => Promise<void>>();
+  private get_new_fd_lock = [] as (() => Promise<void>)[];
 
-  // fdに対して、現在そのfdにidがアクセス可能かを示す。
+  // Indicates whether the given id currently has access to the fd.
   protected fds_map: Array<number[]>;
 
   // If the reassigned value is accessed after being closed,
   // it will be strange,
   // but the programmer should have written it
   // so that this does not happen in the first place.
+  /**
+   * Allocates a new file descriptor index.
+   *
+   * This method uses a locking mechanism to ensure thread-safe allocation
+   * and notifies the backend when a new FD is assigned.
+   *
+   * @returns A promise resolving to a cleanup function and the new FD index.
+   */
   private async get_new_fd(): Promise<[() => Promise<void>, number]> {
     const promise = new Promise<[() => Promise<void>, number]>((resolve) => {
       const len = this.get_new_fd_lock.push(async () => {
@@ -404,7 +426,7 @@ export abstract class WASIFarmPark {
       let ret: number;
       let nwritten: number;
       if (fd_ret instanceof Promise) {
-        // @ts-ignore
+        // @ts-expect-error
         ({ ret, nwritten } = await fd_ret);
       } else {
         ({ ret, nwritten } = fd_ret);

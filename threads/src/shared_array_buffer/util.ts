@@ -1,3 +1,9 @@
+/**
+ * Returns the WASI function name corresponding to a numeric opcode.
+ *
+ * @param num The function opcode.
+ * @returns The name of the WASI function, or "unknown".
+ */
 export const get_func_name_from_number = (num: number): string => {
   switch (num) {
     case 7:
@@ -66,3 +72,25 @@ export const get_func_name_from_number = (num: number): string => {
       return "unknown";
   }
 };
+
+/**
+ * Wraps an async function to allow external termination via a rejection signal.
+ *
+ * @param fn The async function to wrap.
+ * @returns An object containing the promise and a terminate function.
+ */
+export function wrap_async(fn: () => Promise<void>): {
+  promise: Promise<void>;
+  terminate: () => void;
+} {
+  let terminate: () => void = () => {
+    throw new Error("terminate called before async function started");
+  };
+  const promise = new Promise<void>((resolve, reject) => {
+    terminate = () => reject();
+    fn().then((v) => {
+      resolve(v);
+    });
+  });
+  return { promise, terminate };
+}

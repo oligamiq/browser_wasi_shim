@@ -1,10 +1,16 @@
-import type { WorkerBackgroundRefObject } from "./worker_export.js";
-import { WorkerBackgroundRef, WorkerRef } from "./worker_background_ref.js";
-import { url as worker_background_worker_url } from "./worker_blob.js";
+/**
+ * Entry point for the background worker coordination layer.
+ *
+ * This module provides references and utilities for managing background workers
+ * that orchestrate thread spawning and synchronization.
+ */
+import { WorkerBackgroundRef, WorkerRef } from "./worker_background_ref.ts";
+import { url as gen_worker_background_worker_url } from "./worker_blob.ts";
+import type { WorkerBackgroundRefObject } from "./worker_export.ts";
 
 export {
   WorkerBackgroundRef,
   WorkerRef,
   type WorkerBackgroundRefObject,
-  worker_background_worker_url,
+  gen_worker_background_worker_url,
 };

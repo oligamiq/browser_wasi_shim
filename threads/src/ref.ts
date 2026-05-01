@@ -1,6 +1,9 @@
-import type { FdCloseSender } from "./sender.js";
 import type { wasi } from "@bjorn3/browser_wasi_shim";
+import type { FdCloseSender } from "./sender.js";
 
+/**
+ * Represents the serialized state of a WASIFarmRef for thread transfer.
+ */
 export type WASIFarmRefObject = {
   stdin: number | undefined;
   stdout: number | undefined;
@@ -9,6 +12,12 @@ export type WASIFarmRefObject = {
   default_fds: Array<number>;
 };
 
+/**
+ * WASIFarmRef is an abstract base class for guest-side file descriptor operations.
+ *
+ * It provides the interface for system calls like fd_read, fd_write, etc.,
+ * and handles communication with the farm backend.
+ */
 export abstract class WASIFarmRef {
   abstract get_fds_len(): number;
   // please implement this method
@@ -36,6 +45,15 @@ export abstract class WASIFarmRef {
 
   abstract set_id(): number;
 
+  /**
+   * Initializes a new WASIFarmRef.
+   *
+   * @param stdin The standard input FD index.
+   * @param stdout The standard output FD index.
+   * @param stderr The standard error FD index.
+   * @param fd_close_receiver The broadcast receiver for FD closures.
+   * @param default_fds The list of FDs initially accessible.
+   */
   constructor(
     stdin: number | undefined,
     stdout: number | undefined,
@@ -183,4 +201,6 @@ export abstract class WASIFarmRef {
     new_path: Uint8Array,
   ): number;
   abstract path_unlink_file(fd: number | undefined, path: Uint8Array): number;
+
+  abstract destroy_park(): void;
 }

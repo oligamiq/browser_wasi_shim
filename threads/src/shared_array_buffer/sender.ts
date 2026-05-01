@@ -1,8 +1,18 @@
+/**
+ * Represents the serialized state of a ToRefSenderUseArrayBuffer for thread transfer.
+ */
 export type ToRefSenderUseArrayBufferObject = {
   data_size: number;
   share_arrays_memory?: SharedArrayBuffer;
 };
 
+/**
+ * ToRefSenderUseArrayBuffer is an abstract base class for broadcasting notifications
+ * to multiple reference objects via a shared memory buffer.
+ *
+ * It provides thread-safe mechanisms for sending and receiving arbitrary data
+ * using atomic locks and notification flags.
+ */
 // To ref sender abstract class
 export abstract class ToRefSenderUseArrayBuffer {
   // The structure is similar to an allocator, but the mechanism is different
@@ -34,6 +44,13 @@ export abstract class ToRefSenderUseArrayBuffer {
   // The size of the data
   private data_size: number;
 
+  /**
+   * Initializes a new ToRefSenderUseArrayBuffer.
+   *
+   * @param data_size The fixed size of each data entry in bytes.
+   * @param max_share_arrays_memory The maximum size of the shared memory buffer. Defaults to 100KB.
+   * @param share_arrays_memory Optional existing SharedArrayBuffer to use.
+   */
   constructor(
     // data is Uint32Array
     // and data_size is data.length
@@ -53,6 +70,12 @@ export abstract class ToRefSenderUseArrayBuffer {
     Atomics.store(view, 2, 12);
   }
 
+  /**
+   * Internal helper to extract initialization parameters from a transferred object.
+   *
+   * @param sl The serialized sender state.
+   * @returns An object containing the extracted parameters.
+   */
   protected static init_self_inner(sl: ToRefSenderUseArrayBufferObject): {
     data_size: number;
     max_share_arrays_memory: number;
@@ -111,6 +134,12 @@ export abstract class ToRefSenderUseArrayBuffer {
     Atomics.notify(view, 0, 1);
   }
 
+  /**
+   * Asynchronously sends data to the specified target threads.
+   *
+   * @param targets The IDs of the target threads.
+   * @param data The data to send, as a Uint32Array.
+   */
   protected async async_send(
     targets: Array<number>,
     data: Uint32Array,
@@ -148,6 +177,12 @@ export abstract class ToRefSenderUseArrayBuffer {
     this.release_lock();
   }
 
+  /**
+   * Retrieves all data pending for a specific thread ID.
+   *
+   * @param id The thread ID to check.
+   * @returns An array of data entries, each as a Uint32Array, or undefined if no data is pending.
+   */
   protected get_data(id: number): Array<Uint32Array> | undefined {
     const view = new Int32Array(this.share_arrays_memory);
     const data_num_tmp = Atomics.load(view, 1);
@@ -181,6 +216,7 @@ export abstract class ToRefSenderUseArrayBuffer {
         );
 
         // なぜかわからないが、上では正常に動作せず、以下のようにすると動作する
+        // Translation: For some reason, the above does not work correctly, but the following works.
         // return_data.push(new Uint32Array(data));
         return_data.push(new Uint32Array([...data]));
 

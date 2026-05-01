@@ -1,9 +1,12 @@
-import type { FdCloseSender } from "../sender.js";
+import type { FdCloseSender } from "../sender.ts";
 import {
   ToRefSenderUseArrayBuffer,
   type ToRefSenderUseArrayBufferObject,
-} from "./sender.js";
+} from "./sender.ts";
 
+/**
+ * Represents the serialized state of an FdCloseSenderUseArrayBuffer for thread transfer.
+ */
 export type FdCloseSenderUseArrayBufferObject = {
   max_share_arrays_memory?: number;
   share_arrays_memory?: SharedArrayBuffer;
@@ -12,11 +15,23 @@ export type FdCloseSenderUseArrayBufferObject = {
 // Object to tell other processes,
 // such as child processes,
 // that the file descriptor has been closed
+/**
+ * Implements FdCloseSender using a SharedArrayBuffer for cross-thread communication.
+ *
+ * It broadcasts closed file descriptors to child processes and other threads
+ * in a thread-safe manner.
+ */
 export class FdCloseSenderUseArrayBuffer
   extends ToRefSenderUseArrayBuffer
   implements FdCloseSender
 {
   // Should be able to change the size of memory as it accumulates more and more on memory
+  /**
+   * Initializes a new FdCloseSenderUseArrayBuffer.
+   *
+   * @param max_share_arrays_memory Optional maximum size for the shared memory buffer.
+   * @param share_arrays_memory Optional existing SharedArrayBuffer to use.
+   */
   constructor(
     max_share_arrays_memory?: number,
     share_arrays_memory?: SharedArrayBuffer,
@@ -52,6 +67,12 @@ export class FdCloseSenderUseArrayBuffer
   }
 
   // Initialize the class from object
+  /**
+   * Reconstructs a sender from a transferred object.
+   *
+   * @param sl The serialized sender state.
+   * @returns A new FdCloseSender instance.
+   */
   static init_self(sl: FdCloseSenderUseArrayBufferObject): FdCloseSender {
     const sel = ToRefSenderUseArrayBuffer.init_self_inner(sl);
     return new FdCloseSenderUseArrayBuffer(

@@ -1,15 +1,19 @@
 import { wasi } from "@bjorn3/browser_wasi_shim";
-import { WASIFarmRef, type WASIFarmRefObject } from "../ref.js";
+import { gen_wasi_filestat } from "../patch.ts";
+import { WASIFarmRef, type WASIFarmRefObject } from "../ref.ts";
 import {
   AllocatorUseArrayBuffer,
   type AllocatorUseArrayBufferObject,
-} from "./allocator.js";
+} from "./allocator.ts";
 import {
   FdCloseSenderUseArrayBuffer,
   type FdCloseSenderUseArrayBufferObject,
-} from "./fd_close_sender.js";
-import { fd_func_sig_bytes, fd_func_sig_u32_size } from "./park.js";
+} from "./fd_close_sender.ts";
+import { fd_func_sig_bytes, fd_func_sig_u32_size } from "./park.ts";
 
+/**
+ * Represents the serialized state of a WASIFarmRefUseArrayBuffer for thread transfer.
+ */
 export type WASIFarmRefUseArrayBufferObject = {
   allocator: AllocatorUseArrayBuffer;
   lock_fds: SharedArrayBuffer;
@@ -18,6 +22,10 @@ export type WASIFarmRefUseArrayBufferObject = {
   base_func_util: SharedArrayBuffer;
 } & WASIFarmRefObject;
 
+/**
+ * WASIFarmRefUseArrayBuffer implements the `WASIFarmRef` interface using `SharedArrayBuffer`
+ * to proxy WASI system calls to the host-side `WASIFarmPark`.
+ */
 // Transmittable objects to communicate with Park
 export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
   // For more information on member variables, see . See /park.ts
@@ -29,6 +37,20 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
   fd_func_sig: SharedArrayBuffer;
   base_func_util: SharedArrayBuffer;
 
+  /**
+   * Initializes a new WASIFarmRefUseArrayBuffer.
+   *
+   * @param allocator The serialized allocator state.
+   * @param lock_fds The shared buffer for FD locks.
+   * @param fds_len_and_num The shared buffer for global FD state.
+   * @param fd_func_sig The shared buffer for function signatures.
+   * @param base_func_util The shared buffer for base utility signaling.
+   * @param fd_close_receiver The serialized state of the FD close notification receiver.
+   * @param stdin The index of the standard input FD.
+   * @param stdout The index of the standard output FD.
+   * @param stderr The index of the standard error FD.
+   * @param default_fds The initial list of allowed FDs.
+   */
   constructor(
     allocator: AllocatorUseArrayBufferObject,
     lock_fds: SharedArrayBuffer,
@@ -65,6 +87,12 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     return Atomics.load(view, 0);
   }
 
+  /**
+   * Reconstructs a reference from a transferred object.
+   *
+   * @param sl The serialized reference state.
+   * @returns A new WASIFarmRefUseArrayBuffer instance.
+   */
   static init_self(sl: WASIFarmRefUseArrayBufferObject): WASIFarmRef {
     return new WASIFarmRefUseArrayBuffer(
       sl.allocator,
@@ -88,9 +116,17 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     return id;
   }
 
+  private base_func_locker(): Int32Array<SharedArrayBuffer> {
+    return new Int32Array(this.base_func_util);
+  }
+
+  private base_func_park_locker(): Int32Array<SharedArrayBuffer> {
+    return new Int32Array(this.base_func_util, 12);
+  }
+
   // lock base_func
   private lock_base_func(): void {
-    const view = new Int32Array(this.base_func_util);
+    const view = this.base_func_locker();
     // eslint-disable-next-line no-constant-condition
     while (true) {
       const lock = Atomics.wait(view, 0, 1);
@@ -98,27 +134,24 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
         throw new Error("timed-out lock");
       }
       const old = Atomics.compareExchange(view, 0, 0, 1);
-      if (old !== 0) {
-        continue;
+      if (old === 0) {
+        break;
       }
-      break;
     }
   }
 
   // call base_func
   private call_base_func(): void {
-    const view = new Int32Array(this.base_func_util);
-    const old = Atomics.exchange(view, 1, 1);
-    if (old !== 0) {
-      console.error("what happened?");
-    }
+    const view = this.base_func_locker();
+    Atomics.store(view, 2, 1);
+    Atomics.store(view, 1, 0);
     Atomics.notify(view, 1, 1);
   }
 
   // wait base_func
   private wait_base_func(): void {
-    const view = new Int32Array(this.base_func_util);
-    const lock = Atomics.wait(view, 1, 1);
+    const view = this.base_func_locker();
+    const lock = Atomics.wait(view, 2, 1);
     if (lock === "timed-out") {
       throw new Error("timed-out lock");
     }
@@ -126,7 +159,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
 
   // release base_func
   private release_base_func(): void {
-    const view = new Int32Array(this.base_func_util);
+    const view = this.base_func_locker();
     Atomics.store(view, 0, 0);
     Atomics.notify(view, 0, 1);
   }
@@ -134,19 +167,30 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
   // set park_fds_map
   set_park_fds_map(fds: Array<number>): void {
     this.lock_base_func();
-    const view = new Int32Array(this.base_func_util);
-    Atomics.store(view, 2, 0);
+    const view = this.base_func_park_locker();
+    Atomics.store(view, 0, 0);
     const fds_array = new Uint32Array(fds);
     // console.log("fds_array", fds_array);
-    this.allocator.block_write(fds_array, this.base_func_util, 3);
-    Atomics.store(view, 5, this.id);
+    this.allocator.block_write(fds_array, this.base_func_util, 1 + 3);
+    Atomics.store(view, 3, this.id);
     this.call_base_func();
     this.wait_base_func();
     this.release_base_func();
   }
 
+  // destroy park on the main thread
+  destroy_park(): void {
+    this.lock_base_func();
+    const view = this.base_func_park_locker();
+    Atomics.store(view, 0, 1);
+    this.call_base_func();
+    this.wait_base_func();
+    this.release_base_func();
+  }
+
+  key: number = Math.round(Math.random() * 100);
+
   private lock_fd(fd: number) {
-    // console.log("lock_fd start", fd);
     const view = new Int32Array(this.lock_fds, fd * 12);
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -160,7 +204,6 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
       }
       const old = Atomics.compareExchange(view, 0, 0, 1);
       if (old === 0) {
-        // console.log("lock_fd success", fd);
         return;
       }
     }
@@ -169,7 +212,10 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
   private release_fd(fd: number) {
     // console.log("release_fd", fd);
     const view = new Int32Array(this.lock_fds, fd * 12);
-    Atomics.store(view, 0, 0);
+    const before = Atomics.exchange(view, 0, 0);
+    if (before !== 1) {
+      console.error("what happened? before", before);
+    }
     Atomics.notify(view, 0, 1);
   }
 
@@ -232,39 +278,32 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     if (fd === undefined) {
       return false;
     }
-    // console.log("invoke_fd_func", fd);
-    const view = new Int32Array(this.lock_fds, fd * 12 + 4);
-    const old = Atomics.exchange(view, 0, 1);
-    if (old === 1) {
-      console.error(`invoke_fd_func already invoked\nfd: ${fd}`);
-      return false;
+    const view = new Int32Array(this.lock_fds, fd * 12);
+    Atomics.store(view, 2, 1);
+    Atomics.store(view, 1, 0);
+    const n = Atomics.notify(view, 1);
+    if (n === 1) {
+      return true;
     }
-    const n = Atomics.notify(view, 0);
-    if (n !== 1) {
-      if (n === 0) {
-        const len = this.get_fds_len();
-        if (len <= fd) {
-          const lock = Atomics.exchange(view, 0, 0);
-          if (lock !== 1) {
-            console.error("what happened?");
-          }
-          Atomics.notify(view, 0, 1);
-          console.error("what happened?: len", len, "fd", fd);
-          return true;
-        }
-        console.warn("invoke_func_loop is late");
-        return true;
+    if (n === 0) {
+      const len = this.get_fds_len();
+      if (len <= fd) {
+        console.error("invoke_fd_func notify len failed:", n);
+        Atomics.store(view, 2, 0);
+        Atomics.store(view, 1, 1);
+        return false;
       }
-      console.error("invoke_fd_func notify failed:", n);
-      return false;
+      console.warn("invoke_func_loop is late");
+      return true;
     }
-    return true;
+    console.error("invoke_fd_func notify too:", n);
+    return false;
   }
 
   private wait_fd_func(fd: number) {
     // console.log("wait_fd_func", fd);
-    const view = new Int32Array(this.lock_fds, fd * 12 + 4);
-    const value = Atomics.wait(view, 0, 1);
+    const view = new Int32Array(this.lock_fds, fd * 12);
+    const value = Atomics.wait(view, 2, 1);
     if (value === "timed-out") {
       console.error("wait call park_fd_func timed-out");
     }
@@ -276,8 +315,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     }
     // console.log("call_fd_func", fd);
     this.wait_fd_func(fd);
-    // console.log("wait_fd_func", fd);
-    // console.log("call_fd_func released", fd);
+    // console.log("### call_fd_func released", fd);
     return true;
   }
 
@@ -521,12 +559,23 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
 
     this.release_fd(fd);
 
-    const file_stat = new wasi.Filestat(fs_ino, fs_filetype, fs_size);
-    file_stat.dev = fs_dev;
-    file_stat.nlink = fs_nlink;
-    file_stat.atim = fs_atim;
-    file_stat.mtim = fs_mtim;
-    file_stat.ctim = fs_ctim;
+    // const file_stat = new wasi.Filestat(fs_ino, fs_filetype, fs_size);
+    // file_stat.dev = fs_dev;
+    // file_stat.nlink = fs_nlink;
+    // file_stat.atim = fs_atim;
+    // file_stat.mtim = fs_mtim;
+    // file_stat.ctim = fs_ctim;
+
+    const file_stat = gen_wasi_filestat(
+      fs_dev,
+      fs_ino,
+      fs_filetype,
+      fs_nlink,
+      fs_size,
+      fs_atim,
+      fs_mtim,
+      fs_ctim,
+    );
 
     return [file_stat, error];
   }
@@ -1091,12 +1140,23 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
 
     this.release_fd(fd);
 
-    const file_stat = new wasi.Filestat(fs_ino, fs_filetype, fs_size);
-    file_stat.dev = fs_dev;
-    file_stat.nlink = fs_nlink;
-    file_stat.atim = fs_atim;
-    file_stat.mtim = fs_mtim;
-    file_stat.ctim = fs_ctim;
+    // const file_stat = new wasi.Filestat(fs_ino, fs_filetype, fs_size);
+    // file_stat.dev = fs_dev;
+    // file_stat.nlink = fs_nlink;
+    // file_stat.atim = fs_atim;
+    // file_stat.mtim = fs_mtim;
+    // file_stat.ctim = fs_ctim;
+
+    const file_stat = gen_wasi_filestat(
+      fs_dev,
+      fs_ino,
+      fs_filetype,
+      fs_nlink,
+      fs_size,
+      fs_atim,
+      fs_mtim,
+      fs_ctim,
+    );
 
     return [file_stat, error];
   }

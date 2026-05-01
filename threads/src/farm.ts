@@ -1,14 +1,29 @@
 import type { Fd } from "@bjorn3/browser_wasi_shim";
-import type { WASIFarmPark } from "./park.js";
-import type { WASIFarmRefObject } from "./ref.js";
-import { WASIFarmParkUseArrayBuffer } from "./shared_array_buffer/index.js";
+import type { WASIFarmPark } from "./park.ts";
+import type { WASIFarmRefObject } from "./ref.ts";
+import { WASIFarmParkUseArrayBuffer } from "./shared_array_buffer/index.ts";
 
+/**
+ * WASIFarm is the central manager for a virtualized WASI environment.
+ *
+ * It coordinates file descriptors and provides a "park" backend that handles
+ * system calls via shared memory across multiple worker threads.
+ */
 export class WASIFarm {
   private fds: Array<Fd>;
-  private park: WASIFarmPark;
+  private park: WASIFarmPark | null;
 
   private can_array_buffer: boolean;
 
+  /**
+   * Initializes a new WASIFarm.
+   *
+   * @param stdin The standard input file descriptor.
+   * @param stdout The standard output file descriptor.
+   * @param stderr The standard error file descriptor.
+   * @param fds Additional file descriptors to include in the farm.
+   * @param options Configuration options for the farm backend.
+   */
   constructor(
     stdin?: Fd,
     stdout?: Fd,
@@ -16,12 +31,13 @@ export class WASIFarm {
     fds: Array<Fd> = [],
     options: {
       allocator_size?: number;
+      max_fds_limit?: number;
     } = {},
   ) {
     const new_fds = [];
-    let stdin_ = undefined;
-    let stdout_ = undefined;
-    let stderr_ = undefined;
+    let stdin_: number | undefined;
+    let stdout_: number | undefined;
+    let stderr_: number | undefined;
     if (stdin) {
       new_fds.push(stdin);
       stdin_ = new_fds.length - 1;
@@ -72,6 +88,7 @@ export class WASIFarm {
         stderr_,
         default_allow_fds,
         options?.allocator_size,
+        options?.max_fds_limit,
       );
     } else {
       throw new Error("Non SharedArrayBuffer is not supported yet");
@@ -89,12 +106,12 @@ export class WASIFarm {
             return len;
           };
         }
-        // @ts-ignore
+        // @ts-expect-error
         return this.fds[prop];
       },
 
       set: (_, prop, value) => {
-        // @ts-ignore
+        // @ts-expect-error
         this.fds[prop] = value;
         return true;
       },
@@ -103,7 +120,16 @@ export class WASIFarm {
     return fds;
   }
 
+  /**
+   * Generates a reference object that can be transferred to a worker thread.
+   *
+   * @returns A serialized reference to the WASI farm.
+   */
   get_ref(): WASIFarmRefObject {
+    if (this.park === null) {
+      throw new Error("WASIFarm is already destroyed");
+    }
+
     return this.park.get_ref();
   }
 }

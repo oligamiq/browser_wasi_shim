@@ -1,15 +1,29 @@
-import { AllocatorUseArrayBuffer } from "../allocator.js";
+import { AllocatorUseArrayBuffer } from "../allocator.ts";
+import * as Serializer from "../serialize_error.ts";
 import type {
   WorkerBackgroundRefObject,
   WorkerOptions,
-} from "./worker_export.js";
-import * as Serializer from "../serialize_error.js";
+} from "./worker_export.ts";
 
+/**
+ * WorkerBackgroundRef provides a thread-safe interface for communicating with
+ * the background worker coordination layer.
+ *
+ * It uses shared memory and atomic operations to request new workers,
+ * start threads, and manage thread lifecycles.
+ */
 export class WorkerBackgroundRef {
   private allocator: AllocatorUseArrayBuffer;
   private lock: SharedArrayBuffer;
   private signature_input: SharedArrayBuffer;
 
+  /**
+   * Initializes a new WorkerBackgroundRef.
+   *
+   * @param allocator The shared memory allocator.
+   * @param lock The shared buffer for locking the coordination channel.
+   * @param signature_input The shared buffer for system call signatures and parameters.
+   */
   constructor(
     allocator: AllocatorUseArrayBuffer,
     lock: SharedArrayBuffer,
@@ -29,10 +43,9 @@ export class WorkerBackgroundRef {
         throw new Error("timed-out lock");
       }
       const old = Atomics.compareExchange(view, 0, 0, 1);
-      if (old !== 0) {
-        continue;
+      if (old === 0) {
+        return;
       }
-      break;
     }
   }
 
@@ -40,37 +53,28 @@ export class WorkerBackgroundRef {
     const view = new Int32Array(this.lock);
     // eslint-disable-next-line no-constant-condition
     while (true) {
-      let value: "timed-out" | "not-equal" | "ok";
-      const { value: _value } = Atomics.waitAsync(view, 0, 1);
-      if (_value instanceof Promise) {
-        value = await _value;
-      } else {
-        value = _value;
-      }
-      if (value === "timed-out") {
+      const { value } = Atomics.waitAsync(view, 0, 1);
+      if ((await value) === "timed-out") {
         throw new Error("timed-out lock");
       }
       const old = Atomics.compareExchange(view, 0, 0, 1);
-      if (old !== 0) {
-        continue;
+      if (old === 0) {
+        return;
       }
-      break;
     }
   }
 
   private call_base_func(): void {
     const view = new Int32Array(this.lock);
-    const old = Atomics.exchange(view, 1, 1);
-    if (old !== 0) {
-      console.error("what happened?");
-    }
+    Atomics.store(view, 2, 1);
+    Atomics.store(view, 1, 0);
     Atomics.notify(view, 1, 1);
   }
 
   // wait base_func
   private block_wait_base_func(): void {
     const view = new Int32Array(this.lock);
-    const lock = Atomics.wait(view, 1, 1);
+    const lock = Atomics.wait(view, 2, 1);
     if (lock === "timed-out") {
       throw new Error("timed-out lock");
     }
@@ -78,14 +82,8 @@ export class WorkerBackgroundRef {
 
   private async async_wait_base_func(): Promise<void> {
     const view = new Int32Array(this.lock);
-    let value: "timed-out" | "not-equal" | "ok";
-    const { value: _value } = Atomics.waitAsync(view, 1, 1);
-    if (_value instanceof Promise) {
-      value = await _value;
-    } else {
-      value = _value;
-    }
-    if (value === "timed-out") {
+    const { value } = Atomics.waitAsync(view, 2, 1);
+    if ((await value) === "timed-out") {
       throw new Error("timed-out lock");
     }
   }
@@ -97,11 +95,21 @@ export class WorkerBackgroundRef {
     Atomics.notify(view, 0, 1);
   }
 
+  /**
+   * Requests the creation of a new worker thread.
+   *
+   * @param url The URL of the worker script.
+   * @param options Configuration options for the worker.
+   * @param post_obj Optional initialization data to send to the worker.
+   * @returns A WorkerRef representing the newly created worker.
+   */
   new_worker(
     url: string,
     options?: WorkerOptions,
     post_obj?: unknown,
   ): WorkerRef {
+    console.log("new_worker", url, options, post_obj);
+
     this.block_lock_base_func();
     const view = new Int32Array(this.signature_input);
     Atomics.store(view, 0, 1);
@@ -161,6 +169,12 @@ export class WorkerBackgroundRef {
     this.release_base_func();
   }
 
+  /**
+   * Reconstructs a reference from a transferred object.
+   *
+   * @param sl The serialized reference state.
+   * @returns A new WorkerBackgroundRef instance.
+   */
   static init_self(sl: WorkerBackgroundRefObject): WorkerBackgroundRef {
     return new WorkerBackgroundRef(
       AllocatorUseArrayBuffer.init_self(sl.allocator),
@@ -170,7 +184,7 @@ export class WorkerBackgroundRef {
   }
 
   done_notify(code: number): void {
-    const notify_view = new Int32Array(this.lock, 8);
+    const notify_view = new Int32Array(this.lock, 12);
 
     // notify done = code 2
     const old = Atomics.compareExchange(notify_view, 0, 0, 2);
@@ -191,7 +205,7 @@ export class WorkerBackgroundRef {
   }
 
   async async_wait_done_or_error(): Promise<number> {
-    const notify_view = new Int32Array(this.lock, 8);
+    const notify_view = new Int32Array(this.lock, 12);
 
     Atomics.store(notify_view, 0, 0);
 
@@ -207,11 +221,17 @@ export class WorkerBackgroundRef {
       throw new Error("timed-out");
     }
 
-    if (value === "not-equal") {
-      throw new Error("not-equal");
-    }
-
     const code = Atomics.load(notify_view, 0);
+
+    if (code === 3) {
+      const old = Atomics.compareExchange(notify_view, 0, 3, 0);
+
+      if (old !== 3) {
+        console.error("what happened?");
+      }
+
+      return 0;
+    }
 
     if (code === 2) {
       const old = Atomics.compareExchange(notify_view, 0, 2, 0);
@@ -249,7 +269,7 @@ export class WorkerBackgroundRef {
   }
 
   block_wait_done_or_error(): number {
-    const notify_view = new Int32Array(this.lock, 8);
+    const notify_view = new Int32Array(this.lock, 12);
 
     Atomics.store(notify_view, 0, 0);
 
@@ -259,11 +279,17 @@ export class WorkerBackgroundRef {
       throw new Error("timed-out");
     }
 
-    if (value === "not-equal") {
-      throw new Error("not-equal");
-    }
-
     const code = Atomics.load(notify_view, 0);
+
+    if (code === 3) {
+      const old = Atomics.compareExchange(notify_view, 0, 3, 0);
+
+      if (old !== 3) {
+        console.error("what happened?");
+      }
+
+      return 0;
+    }
 
     if (code === 2) {
       const old = Atomics.compareExchange(notify_view, 0, 2, 0);
@@ -299,8 +325,40 @@ export class WorkerBackgroundRef {
 
     throw error;
   }
+
+  terminate_all_workers(): void {
+    this.block_lock_base_func();
+    const view = new Int32Array(this.signature_input);
+    Atomics.store(view, 0, 3);
+    this.call_base_func();
+    this.block_wait_base_func();
+    this.release_base_func();
+  }
+
+  destroy(): void {
+    this.block_lock_base_func();
+    const view = new Int32Array(this.signature_input);
+    Atomics.store(view, 0, 5);
+    this.call_base_func();
+    this.block_wait_base_func();
+    this.release_base_func();
+  }
+
+  kill_animal(id: number): void {
+    this.block_lock_base_func();
+    const view = new Int32Array(this.signature_input);
+    Atomics.store(view, 0, 4);
+    Atomics.store(view, 1, id);
+    this.call_base_func();
+    this.block_wait_base_func();
+    this.release_base_func();
+  }
 }
 
+/**
+ * WorkerRef represents a handle to a worker thread managed by the background
+ * coordination layer.
+ */
 export class WorkerRef {
   private id: number;
 

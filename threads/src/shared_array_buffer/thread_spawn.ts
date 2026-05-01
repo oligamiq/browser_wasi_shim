@@ -14,29 +14,50 @@
 
 //  (import "wasi" "thread-spawn" (func $fimport$27 (param i32) (result i32)))
 
-import { WASIFarmAnimal } from "../animals.js";
-import type { WASIFarmRefObject } from "../ref.js";
-import type { WorkerBackgroundRefObject } from "./worker_background/index.js";
+import { WASIProcExit } from "@bjorn3/browser_wasi_shim";
+import { WASIFarmAnimal } from "../animals.ts";
+import { DestroyerHandle } from "../index.ts";
+import type { WASIFarmRefObject } from "../ref.ts";
+import type { WorkerBackgroundRefObject } from "./worker_background/index.ts";
 import {
+  gen_worker_background_worker_url,
   WorkerBackgroundRef,
-  worker_background_worker_url,
-} from "./worker_background/index.js";
-import { WorkerBackgroundRefObjectConstructor } from "./worker_background/worker_export.js";
+} from "./worker_background/index.ts";
+import { WorkerBackgroundRefObjectConstructor } from "./worker_background/worker_export.ts";
 
+/**
+ * Represents the serialized state of a ThreadSpawner for thread transfer.
+ */
 type ThreadSpawnerObject = {
-  share_memory: WebAssembly.Memory;
+  share_memory: {
+    [key: string]: WebAssembly.Memory;
+  };
   wasi_farm_refs_object: Array<WASIFarmRefObject>;
   worker_url: string;
   worker_background_ref_object: WorkerBackgroundRefObject;
+  destroy_status: SharedArrayBuffer;
+  animal_id_counter: SharedArrayBuffer;
   // inst_default_buffer_kept: WebAssembly.Memory;
 };
 
+/**
+ * ThreadSpawner manages the spawning and lifecycle of WebAssembly threads.
+ *
+ * It coordinates with a background worker to manage thread resources,
+ * shared memory, and synchronization primitives.
+ */
 export class ThreadSpawner {
-  private share_memory: WebAssembly.Memory;
+  private share_memory: {
+    [key: string]: WebAssembly.Memory;
+  };
   private wasi_farm_refs_object: Array<WASIFarmRefObject>;
   private worker_url: string;
   private worker_background_ref: WorkerBackgroundRef;
   private worker_background_ref_object: WorkerBackgroundRefObject;
+
+  private destroy_status: SharedArrayBuffer;
+  private animal_id_counter: SharedArrayBuffer;
+
   // inst_default_buffer_kept: WebAssembly.Memory;
 
   // hold the worker to prevent GC.
@@ -45,53 +66,77 @@ export class ThreadSpawner {
 
   // https://github.com/rustwasm/wasm-pack/issues/479
 
+  /**
+   * Initializes a new ThreadSpawner.
+   *
+   * @param worker_url The URL of the worker script.
+   * @param wasi_farm_refs_object The serialized state of WASI farm references.
+   * @param share_memory The shared WebAssembly memories.
+   * @param MIN_STACK The minimum stack size for spawned threads. Defaults to 16MB.
+   * @param worker_background_ref_object The serialized state of the background worker reference.
+   * @param thread_spawn_wasm The WebAssembly module used for thread spawning.
+   * @param worker_background_worker_url Optional custom URL for the background worker.
+   * @param destroy_status Shared buffer for tracking destruction status.
+   * @param animal_id_counter Shared buffer for generating unique process IDs.
+   */
   constructor(
     worker_url: string,
     wasi_farm_refs_object: Array<WASIFarmRefObject>,
-    share_memory?: WebAssembly.Memory,
+    share_memory?: {
+      [key: string]: WebAssembly.Memory;
+    },
     // 16MB for the time being.
     // https://users.rust-lang.org/t/what-is-the-size-limit-of-threads-stack-in-rust/11867/3
     MIN_STACK = 16777216,
     worker_background_ref_object?: WorkerBackgroundRefObject,
     thread_spawn_wasm?: WebAssembly.Module,
     // inst_default_buffer_kept?: WebAssembly.Memory,
+    worker_background_worker_url?: string,
+    destroy_status?: SharedArrayBuffer,
+    animal_id_counter?: SharedArrayBuffer,
   ) {
     this.worker_url = worker_url;
     this.wasi_farm_refs_object = wasi_farm_refs_object;
 
-    const min_initial_size = 1048576 / 65536; // Rust's default stack size is 1MB.
-    const initial_size = MIN_STACK / 65536;
-    if (initial_size < min_initial_size) {
-      throw new Error(
-        `The stack size must be at least ${min_initial_size} bytes.`,
-      );
-    }
-    const max_memory = 1073741824 / 65536; // Rust's default maximum memory size is 1GB.
+    this.destroy_status = destroy_status ?? new SharedArrayBuffer(8);
+    this.animal_id_counter = animal_id_counter ?? new SharedArrayBuffer(4);
 
-    // this.inst_default_buffer_kept =
-    //   inst_default_buffer_kept ||
-    //   new WebAssembly.Memory({
-    //     initial: 1,
-    //     maximum: max_memory,
-    //     shared: true,
-    //   });
+    if (share_memory === undefined) {
+      const min_initial_size = 1048576 / 65536; // Rust's default stack size is 1MB.
+      const initial_size = MIN_STACK / 65536;
+      if (initial_size < min_initial_size) {
+        throw new Error(
+          `The stack size must be at least ${min_initial_size} bytes.`,
+        );
+      }
+      const max_memory = 1073741824 / 65536; // Rust's default maximum memory size is 1GB.
 
-    this.share_memory =
-      share_memory ||
       // WebAssembly.Memory's 1 page is 65536 bytes.
-      new WebAssembly.Memory({
-        initial: initial_size,
-        maximum: max_memory,
-        shared: true,
-      });
+      this.share_memory = {
+        memory: new WebAssembly.Memory({
+          initial: initial_size,
+          maximum: max_memory,
+          shared: true,
+        }),
+      };
+    } else {
+      this.share_memory = share_memory;
+    }
 
     if (worker_background_ref_object === undefined) {
-      const worker_background_worker_url__ = worker_background_worker_url();
+      let worker_background_worker_url__: string;
+      if (worker_background_worker_url) {
+        worker_background_worker_url__ = worker_background_worker_url;
+      } else {
+        worker_background_worker_url__ = gen_worker_background_worker_url();
+      }
       this.worker_background_worker = new Worker(
         worker_background_worker_url__,
         { type: "module" },
       );
-      URL.revokeObjectURL(worker_background_worker_url__);
+      if (!worker_background_worker_url) {
+        URL.revokeObjectURL(worker_background_worker_url__);
+      }
       const { promise, resolve } = Promise.withResolvers<void>();
       this.worker_background_worker_promise = promise;
       this.worker_background_worker.onmessage = () => {
@@ -108,7 +153,9 @@ export class ThreadSpawner {
           sl_object: this.get_object(),
           thread_spawn_wasm,
         },
-        worker_background_ref_object: this.worker_background_ref_object,
+        worker_background_ref_object: structuredClone(
+          this.worker_background_ref_object,
+        ),
       });
     } else {
       this.worker_background_ref_object = worker_background_ref_object;
@@ -121,9 +168,7 @@ export class ThreadSpawner {
   // This cannot blocking.
   async wait_worker_background_worker(): Promise<void> {
     if (this.worker_background_worker_promise) {
-      const promise = this.worker_background_worker_promise;
-
-      await promise;
+      await this.worker_background_worker_promise;
 
       return;
     }
@@ -136,6 +181,15 @@ export class ThreadSpawner {
     }
   }
 
+  /**
+   * Spawns a new thread.
+   *
+   * @param start_arg The argument passed to the thread start function.
+   * @param args The command line arguments for the thread.
+   * @param env The environment variables for the thread.
+   * @param fd_map A mapping of file descriptors for the thread.
+   * @returns The ID of the spawned thread.
+   */
   thread_spawn(
     start_arg: number,
     args: Array<string>,
@@ -157,6 +211,16 @@ export class ThreadSpawner {
     const thread_id = worker.get_id();
 
     return thread_id;
+  }
+
+  create_destroyer(): DestroyerHandle {
+    return new DestroyerHandle(this.worker_background_ref, this.destroy_status);
+  }
+
+  /// This is atomic
+  generate_animal_id(): number {
+    const buffer = new Int32Array(this.animal_id_counter);
+    return Atomics.add(buffer, 0, 1);
   }
 
   async async_start_on_thread(
@@ -218,8 +282,10 @@ export class ThreadSpawner {
       sl.share_memory,
       undefined,
       sl.worker_background_ref_object,
-      // undefined,
-      // sl.inst_default_buffer_kept,
+      undefined,
+      undefined,
+      sl.destroy_status,
+      sl.animal_id_counter,
     );
     return thread_spawner;
   }
@@ -234,13 +300,17 @@ export class ThreadSpawner {
       sl.share_memory,
       undefined,
       worker_background_ref_object,
-      // undefined,
-      // sl.inst_default_buffer_kept,
+      undefined,
+      undefined,
+      sl.destroy_status,
+      sl.animal_id_counter,
     );
     return thread_spawner;
   }
 
-  get_share_memory(): WebAssembly.Memory {
+  get_share_memory(): {
+    [key: string]: WebAssembly.Memory;
+  } {
     return this.share_memory;
   }
 
@@ -250,6 +320,8 @@ export class ThreadSpawner {
       wasi_farm_refs_object: this.wasi_farm_refs_object,
       worker_url: this.worker_url,
       worker_background_ref_object: this.worker_background_ref_object,
+      destroy_status: this.destroy_status,
+      animal_id_counter: this.animal_id_counter,
       // inst_default_buffer_kept: this.inst_default_buffer_kept,
     };
   }
@@ -273,22 +345,76 @@ export class ThreadSpawner {
 
     return this.worker_background_ref.block_wait_done_or_error();
   }
+
+  /// Destroys the all threads spawned by this Runtime.
+  destroy() {
+    const view = new Int32Array(this.destroy_status);
+    // Acquire lock at idx=0
+    Atomics.store(view, 0, 1);
+    // Set notification flag at idx=1
+    Atomics.store(view, 1, 1);
+
+    this.worker_background_ref.destroy();
+
+    // Signal completion
+    Atomics.store(view, 0, 0);
+    Atomics.notify(view, 0);
+
+    if (this.worker_background_worker) {
+      this.worker_background_worker = undefined;
+    }
+  }
+
+  kill_animal(id: number) {
+    this.worker_background_ref.kill_animal(id);
+  }
 }
 
-// send fd_map is not implemented yet.
-// issue: the fd passed to the child process is different from the parent process.
-export const thread_spawn_on_worker = async (msg: {
-  this_is_thread_spawn: boolean;
-  worker_id?: number;
-  start_arg: number;
-  worker_background_ref: WorkerBackgroundRefObject;
-  sl_object: ThreadSpawnerObject;
-  thread_spawn_wasm: WebAssembly.Module;
-  args: Array<string>;
-  env: Array<string>;
-  fd_map: [number, number][];
-  this_is_start?: boolean;
-}): Promise<WASIFarmAnimal | undefined> => {
+/** send fd_map is not implemented yet.
+issue: the fd passed to the child process is different from the parent process.
+@param instantiate - WebAssembly.instantiate or custom instantiate function
+*/
+/**
+ * The entry point for thread spawning on a worker.
+ *
+ * It handles the message from the parent thread and initializes the WASI environment
+ * and WebAssembly instance for the new thread.
+ *
+ * @param msg The message containing thread initialization data.
+ * @param instantiate An optional custom WebAssembly instantiation function.
+ * @returns A promise that resolves to the created WASIFarmAnimal.
+ */
+export const thread_spawn_on_worker = async (
+  msg: {
+    this_is_thread_spawn: boolean;
+    worker_id?: number;
+    start_arg: number;
+    worker_background_ref: WorkerBackgroundRefObject;
+    sl_object: ThreadSpawnerObject;
+    thread_spawn_wasm: WebAssembly.Module;
+    args: Array<string>;
+    env: Array<string>;
+    fd_map: [number, number][];
+    this_is_start?: boolean;
+  },
+  instantiate: (
+    thread_spawn_wasm: WebAssembly.Module,
+    imports: {
+      env: {
+        [key: string]: WebAssembly.Memory;
+      };
+      wasi: {
+        "thread-spawn": (start_arg: number) => number;
+      };
+      wasi_snapshot_preview1: {
+        // biome-ignore lint/suspicious/noExplicitAny: <explanation>
+        [key: string]: (...args: any[]) => unknown;
+      };
+    },
+  ) => Promise<WebAssembly.Instance> = WebAssembly.instantiate.bind(
+    WebAssembly,
+  ),
+): Promise<WASIFarmAnimal | undefined> => {
   if (msg.this_is_thread_spawn) {
     const {
       sl_object,
@@ -335,16 +461,16 @@ export const thread_spawn_on_worker = async (msg: {
         thread_spawner,
       );
 
-      const inst = await WebAssembly.instantiate(thread_spawn_wasm, {
+      const inst = await instantiate(thread_spawn_wasm, {
         env: {
-          memory: wasi.get_share_memory(),
+          ...wasi.get_share_memory(),
         },
         wasi: wasi.wasiThreadImport,
         wasi_snapshot_preview1: wasi.wasiImport,
       });
 
       try {
-        wasi.start(
+        wasi.start_only(
           inst as unknown as {
             exports: {
               memory: WebAssembly.Memory;
@@ -353,11 +479,7 @@ export const thread_spawn_on_worker = async (msg: {
           },
         );
       } catch (e) {
-        globalThis.postMessage({
-          msg: "error",
-          error: e,
-        });
-
+        check_error(e, "main");
         return wasi;
       }
 
@@ -370,7 +492,7 @@ export const thread_spawn_on_worker = async (msg: {
 
     const { worker_id: thread_id, start_arg } = msg;
 
-    console.log(`thread_spawn worker ${thread_id} start`);
+    console.debug(`thread_spawn worker ${thread_id} start`);
 
     const wasi = new WASIFarmAnimal(
       sl_object.wasi_farm_refs_object,
@@ -385,9 +507,9 @@ export const thread_spawn_on_worker = async (msg: {
       thread_spawner,
     );
 
-    const inst = await WebAssembly.instantiate(thread_spawn_wasm, {
+    const inst = await instantiate(thread_spawn_wasm, {
       env: {
-        memory: wasi.get_share_memory(),
+        ...wasi.get_share_memory(),
       },
       wasi: wasi.wasiThreadImport,
       wasi_snapshot_preview1: wasi.wasiImport,
@@ -410,11 +532,8 @@ export const thread_spawn_on_worker = async (msg: {
         start_arg,
       );
     } catch (e) {
-      globalThis.postMessage({
-        msg: "error",
-        error: e,
-      });
-
+      // biome-ignore lint/style/noNonNullAssertion: <explanation>
+      check_error(e, thread_id!);
       return wasi;
     }
 
@@ -425,3 +544,48 @@ export const thread_spawn_on_worker = async (msg: {
     return wasi;
   }
 };
+
+function check_error(e: unknown, thread_id: number | string): void {
+  let e_alt: Error | undefined;
+
+  if (e instanceof WASIProcExit) {
+    globalThis.postMessage({
+      msg: "exit",
+      code: e.code,
+    });
+
+    return;
+  }
+
+  try {
+    structuredClone(e);
+  } catch (error) {
+    if (
+      (
+        error as {
+          name: string;
+        }
+      ).name === "DataCloneError"
+    ) {
+      e_alt = new Error(
+        `An error occurred on the thread ${thread_id}, but it cannot be cloned.
+                Since error propagation does not work properly with this,
+                stopping cannot be performed.
+                Therefore, I will insert this error instead.
+                The error currently confirmed occurs in Firefox,
+                after executing with invoke on webworker and reaching an unreachable statement.
+                `,
+      );
+      e_alt.name = "EncounteredUncloneableError";
+      e_alt.stack = (e as Error).stack;
+    }
+  }
+  if (e_alt === undefined) {
+    e_alt = e as Error;
+  }
+
+  globalThis.postMessage({
+    msg: "error",
+    error: e_alt,
+  });
+}
