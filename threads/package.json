@@ -1,6 +1,6 @@
 {
   "name": "@oligami/browser_wasi_shim-threads",
-  "version": "0.3.0",
+  "version": "0.3.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -67,6 +67,13 @@
       },
       "types": "./dist/index.d.ts",
       "default": "./dist/browser-wasi-shim-threads.es.js"
+    },
+    "./worker_background_worker": {
+      "import": {
+        "types": "./dist/worker_background_worker.min.d.ts",
+        "default": "./dist/worker_background_worker.min.js"
+      },
+      "default": "./dist/worker_background_worker.min.js"
     }
   },
   "files": [

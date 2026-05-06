@@ -25,6 +25,9 @@ class WorkerBackground<T> {
   // worker_id starts from 1
   private workers: Array<Worker | undefined> = [undefined];
 
+  // @ts-expect-error
+  private listen_holder: Promise<void>;
+
   private start_worker?: Worker;
   private animal_workers = new Map<number, Worker>();
 
@@ -40,6 +43,8 @@ class WorkerBackground<T> {
       allocator ??
       new AllocatorUseArrayBuffer(new SharedArrayBuffer(10 * 1024));
     this.signature_input = signature_input ?? new SharedArrayBuffer(24);
+
+    this.listen_holder = this.listen();
   }
 
   static init_self<T>(

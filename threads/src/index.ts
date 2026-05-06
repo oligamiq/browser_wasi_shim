@@ -10,8 +10,15 @@ import { WASIFarmRef } from "./ref.ts";
 import { DestroyerHandle } from "./destroyer_handle.ts";
 export { thread_spawn_on_worker } from "./shared_array_buffer/index.ts";
 export { WASIFarm, WASIFarmRef, WASIFarmAnimal, DestroyerHandle };
-const worker_background_worker_url: string =
-  "./dist/worker_background_worker.min.ts";
+
+// @ts-ignore
+import worker_background_worker from "./shared_array_buffer/worker_background/worker_background_worker_minify.js";
+export { worker_background_worker };
+
+const worker_background_worker_url: string = new URL(
+  "./worker_background_worker.min.js",
+  import.meta.url,
+).href;
 export { worker_background_worker_url };
 // @ts-ignore
 export { wait_async_polyfill } from "./polyfill.js";

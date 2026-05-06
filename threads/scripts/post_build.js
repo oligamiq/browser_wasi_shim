@@ -8,3 +8,8 @@ fs.copyFileSync(
   worker_background_worker_url,
   "./dist/worker_background_worker.min.js",
 );
+
+fs.copyFileSync(
+  "./src/worker_background_worker.min.d.ts",
+  "./dist/worker_background_worker.min.d.ts",
+);
