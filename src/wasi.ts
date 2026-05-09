@@ -867,8 +867,23 @@ export default class WASI {
           ((s.flags & wasi.SUBCLOCKFLAGS_SUBSCRIPTION_CLOCK_ABSTIME) !== 0
             ? timeout
             : getNow() + timeout) - s.precision;
-        while (endTime > getNow()) {
-          // block until the timeout is reached
+        // Recalculate remaining time right before blocking to account for
+        // overhead incurred during subscription parsing and clock selection.
+        const remainingNs = endTime - getNow();
+        if (remainingNs > 0n) {
+          const remainingMs = Number(remainingNs / 1_000_000n);
+          if (remainingMs > 0) {
+            try {
+              // Atomics.wait blocks the current thread efficiently without
+              // busy-waiting. Works in Worker threads and Node.js main thread.
+              const sleepBuffer = new Int32Array(new SharedArrayBuffer(4));
+              Atomics.wait(sleepBuffer, 0, 0, remainingMs);
+            } catch {
+              // Atomics.wait throws TypeError on the browser main thread.
+              // Fall back to busy-wait as a last resort.
+              while (endTime > getNow()) {}
+            }
+          }
         }
 
         // Write an event to the out buffer

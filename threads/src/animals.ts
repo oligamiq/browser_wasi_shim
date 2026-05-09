@@ -35,6 +35,10 @@ export class WASIFarmAnimal {
 
   private can_array_buffer;
 
+  // Dedicated buffer for Atomics.wait-based sleep in poll_oneoff.
+  // Using a class field avoids allocating a new SharedArrayBuffer on every call.
+  private sleepBuffer = new Int32Array(new SharedArrayBuffer(4));
+
   private can_thread_spawn?: boolean;
 
   private thread_spawner?: ThreadSpawner;
@@ -1389,8 +1393,18 @@ export class WASIFarmAnimal {
           ((s.flags & wasi.SUBCLOCKFLAGS_SUBSCRIPTION_CLOCK_ABSTIME) !== 0
             ? timeout
             : getNow() + timeout) - s.precision;
-        while (endTime > getNow()) {
-          // block until the timeout is reached
+        // Recalculate remaining time right before blocking to account for
+        // overhead incurred during subscription parsing and clock selection.
+        const remainingNs = endTime - getNow();
+        if (remainingNs > 0n) {
+          const remainingMs = Number(remainingNs / 1_000_000n);
+          if (remainingMs > 0) {
+            // Atomics.wait blocks the current thread efficiently without
+            // busy-waiting. This works because animals.ts always runs in a
+            // Worker thread where Atomics.wait is permitted, and
+            // SharedArrayBuffer is guaranteed available (checked in constructor).
+            Atomics.wait(self.sleepBuffer, 0, 0, remainingMs);
+          }
         }
 
         // Write an event to the out buffer
