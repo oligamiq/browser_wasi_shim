@@ -8,9 +8,13 @@ const wasi = new WASI_actual(
   [],
   [
     new OpenFile(new File([])),
-    ConsoleStdout.lineBuffered((msg) => console.log(`[Node WASI stdout] ${msg}`)),
-    ConsoleStdout.lineBuffered((msg) => console.warn(`[Node WASI stderr] ${msg}`)),
-  ]
+    ConsoleStdout.lineBuffered((msg) =>
+      console.log(`[Node WASI stdout] ${msg}`),
+    ),
+    ConsoleStdout.lineBuffered((msg) =>
+      console.warn(`[Node WASI stderr] ${msg}`),
+    ),
+  ],
 );
 
 const wasmBuffer = readFileSync("./poll_oneoff_sleep/sleep.wasm");

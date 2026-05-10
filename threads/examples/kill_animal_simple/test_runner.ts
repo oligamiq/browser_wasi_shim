@@ -6,10 +6,15 @@ try {
   self.onmessage = async (e) => {
     if (e.data.wasi_ref && e.data.wasi_ref2) {
       console.log("[TestRunner] Received wasi_refs from main thread");
-      
+
       try {
         // Create WASIFarmAnimal - basic setup without thread spawning
-        const wasi = new WASIFarmAnimal([e.data.wasi_ref, e.data.wasi_ref2], [], [], {});
+        const wasi = new WASIFarmAnimal(
+          [e.data.wasi_ref, e.data.wasi_ref2],
+          [],
+          [],
+          {},
+        );
 
         console.log("[TestRunner] WASIFarmAnimal created");
         self.postMessage({ started: true });
@@ -18,11 +23,13 @@ try {
         // In a real scenario, this would be assigned by thread_spawner.generate_animal_id()
         // For this simple test, we'll use a fixed ID
         const animal_id = 1;
-        console.log(`[TestRunner] Simulating thread spawn with animal_id: ${animal_id}`);
+        console.log(
+          `[TestRunner] Simulating thread spawn with animal_id: ${animal_id}`,
+        );
         self.postMessage({ spawned: animal_id });
 
         // Small delay to simulate thread work
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await new Promise((resolve) => setTimeout(resolve, 100));
 
         // Call kill_animal to terminate the thread
         console.log(`[TestRunner] Calling kill_animal(${animal_id})`);

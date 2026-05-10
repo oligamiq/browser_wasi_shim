@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WASI Farm - call_unknown_fn Example</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; }
+        pre { background: #f4f4f4; padding: 15px; border-radius: 5px; white-space: pre-wrap; word-wrap: break-word; }
+        .success { color: green; font-weight: bold; }
+        .error { color: red; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>WASI Farm - <code>call_unknown_fn</code> Example</h1>
+    <p>This example demonstrates cross-thread function calls from a <code>WASIFarmAnimal</code> (Worker) to a <code>WASIFarm</code> (Main Thread).</p>
+    <button id="run-test">Run call_unknown_fn Test</button>
+    <h3>Output:</h3>
+    <pre id="output"></pre>
+
+    <script type="module" src="./index.ts"></script>
+</body>
+</html>

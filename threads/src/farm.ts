@@ -32,6 +32,7 @@ export class WASIFarm {
     options: {
       allocator_size?: number;
       max_fds_limit?: number;
+      unknown_fn?: ((arg: unknown) => Promise<unknown> | unknown) | null;
     } = {},
   ) {
     const new_fds = [];
@@ -89,6 +90,7 @@ export class WASIFarm {
         default_allow_fds,
         options?.allocator_size,
         options?.max_fds_limit,
+        options?.unknown_fn,
       );
     } else {
       throw new Error("Non SharedArrayBuffer is not supported yet");

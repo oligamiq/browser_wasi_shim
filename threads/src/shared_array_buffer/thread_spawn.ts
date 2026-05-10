@@ -414,6 +414,7 @@ export const thread_spawn_on_worker = async (
   ) => Promise<WebAssembly.Instance> = WebAssembly.instantiate.bind(
     WebAssembly,
   ),
+  callback: (wasi: WASIFarmAnimal) => void = () => {},
 ): Promise<WASIFarmAnimal | undefined> => {
   if (msg.this_is_thread_spawn) {
     const {
@@ -461,6 +462,8 @@ export const thread_spawn_on_worker = async (
         thread_spawner,
       );
 
+      callback(wasi);
+
       const inst = await instantiate(thread_spawn_wasm, {
         env: {
           ...wasi.get_share_memory(),
@@ -506,6 +509,8 @@ export const thread_spawn_on_worker = async (
       override_fd_map,
       thread_spawner,
     );
+
+    callback(wasi);
 
     const inst = await instantiate(thread_spawn_wasm, {
       env: {

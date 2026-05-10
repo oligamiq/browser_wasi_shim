@@ -132,6 +132,14 @@ export class WASIFarmAnimal {
     instance.exports._start();
   }
 
+  /**
+   *
+   * This function only initializes the instance and does not start the execution.
+   */
+  initialize_only(instance: { exports: { memory: WebAssembly.Memory } }) {
+    this.inst = instance;
+  }
+
   /** Start a WASI command on a thread.
       If the module has child threads and one of them throws an error,
       the main thread should normally also be stopped.
@@ -430,6 +438,14 @@ export class WASIFarmAnimal {
     this.destroy();
   }
 
+  /// Call unknown_fn on the WASIFarm with the given index
+  call_unknown_fn(idx: number, unknown: unknown): unknown {
+    if (idx < 0 || idx >= this.wasi_farm_refs.length) {
+      throw new Error(`wasi_farm_refs index ${idx} is out of bounds.`);
+    }
+    return this.wasi_farm_refs[idx].call_unknown_fn(unknown);
+  }
+
   /// Kill the Animal with the given ID on another thread
   kill_animal(id: number) {
     this.thread_spawner?.kill_animal(id);
@@ -629,7 +645,7 @@ export class WASIFarmAnimal {
           let monotonic_time: bigint;
           try {
             monotonic_time = BigInt(Math.round(performance.now() * 1000000));
-          } catch (e) {
+          } catch (_e) {
             // performance.now() is only available in browsers.
             // TODO use the perf_hooks builtin module for NodeJS
             monotonic_time = 0n;

@@ -8,7 +8,7 @@ self.onmessage = async (e) => {
   const wasi = new WASIFarmAnimal(
     wasi_ref,
     ["sleep.wasm", "1000"], // args: sleep for 1000ms
-    []
+    [],
   );
 
   const wasm = await fetch("./sleep.wasm");

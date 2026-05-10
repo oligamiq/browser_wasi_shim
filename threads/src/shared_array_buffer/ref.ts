@@ -188,6 +188,34 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     this.release_base_func();
   }
 
+  call_unknown_fn(arg: unknown): unknown {
+    this.lock_base_func();
+    const view = this.base_func_park_locker();
+    Atomics.store(view, 0, 2);
+    const arg_str = JSON.stringify(arg);
+    const arg_bytes = new TextEncoder().encode(arg_str);
+    this.allocator.block_write(arg_bytes, this.base_func_util, 3 + 1);
+
+    this.call_base_func();
+    this.wait_base_func();
+
+    const ret_ptr = Atomics.load(view, 3);
+    const ret_len = Atomics.load(view, 4);
+
+    let ret: unknown;
+    if (ret_len > 0) {
+      const ret_bytes = new Uint8Array(
+        this.allocator.get_memory(ret_ptr, ret_len),
+      );
+      this.allocator.free(ret_ptr, ret_len);
+      const ret_str = new TextDecoder().decode(ret_bytes);
+      ret = JSON.parse(ret_str);
+    }
+
+    this.release_base_func();
+    return ret;
+  }
+
   key: number = Math.round(Math.random() * 100);
 
   private lock_fd(fd: number) {
