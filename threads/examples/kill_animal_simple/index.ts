@@ -59,18 +59,20 @@ runBtn.addEventListener("click", async () => {
 
     worker.onmessage = async (event) => {
       console.log("[Main] Message received:", event.data);
-      
+
       if (event.data.started) {
         log("✓ Worker: Test started - WASIFarmAnimal created");
       }
-      
+
       if (event.data.spawned) {
         log(`✓ Worker: Thread spawned with ID ${event.data.spawned}`);
       }
-      
+
       if (event.data.killed) {
         clearTimeout(timeout);
-        log(`✓ Worker: kill_animal() called for thread ID ${event.data.killed}`);
+        log(
+          `✓ Worker: kill_animal() called for thread ID ${event.data.killed}`,
+        );
         log("✓ Worker: Thread terminated successfully\n");
 
         log("✓ Main: All cleanup complete");
@@ -80,7 +82,7 @@ runBtn.addEventListener("click", async () => {
           log("=== TEST COMPLETED SUCCESSFULLY ===");
         }, 100);
       }
-      
+
       if (event.data.error) {
         clearTimeout(timeout);
         log(`✗ Worker error: ${event.data.error}`);

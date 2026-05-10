@@ -34,6 +34,9 @@ export abstract class WASIFarmPark {
     stdout: number | undefined,
     stderr: number | undefined,
     default_allow_fds: Array<number>,
+    protected unknown_fn?:
+      | ((arg: unknown) => Promise<unknown> | unknown)
+      | null,
   ) {
     this.fds = fds;
     this.stdin = stdin;

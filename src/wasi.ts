@@ -17,6 +17,7 @@ export class WASIProcExit extends Error {
 
 export default class WASI {
   #freeFds: Array<number> = [];
+  #sleepBuffer: Int32Array | undefined;
 
   args: Array<string> = [];
   env: Array<string> = [];
@@ -867,8 +868,31 @@ export default class WASI {
           ((s.flags & wasi.SUBCLOCKFLAGS_SUBSCRIPTION_CLOCK_ABSTIME) !== 0
             ? timeout
             : getNow() + timeout) - s.precision;
-        while (endTime > getNow()) {
-          // block until the timeout is reached
+        // Recalculate remaining time right before blocking to account for
+        // overhead incurred during subscription parsing and clock selection.
+        const remainingNs = endTime - getNow();
+        if (remainingNs > 0n) {
+          const remainingMs = Number(remainingNs / 1_000_000n);
+          if (remainingMs > 0) {
+            try {
+              // Atomics.wait blocks the current thread efficiently without
+              // busy-waiting. Works in Worker threads and Node.js main thread.
+              if (self.#sleepBuffer === undefined) {
+                const shared = new WebAssembly.Memory({
+                  initial: 1,
+                  maximum: 1,
+                  shared: true,
+                });
+                self.#sleepBuffer = new Int32Array(shared.buffer);
+              }
+              Atomics.wait(self.#sleepBuffer, 0, 0, remainingMs);
+            } catch {
+              // Fall back to busy-wait below.
+            }
+          }
+          // Busy-wait for any remaining time, including the case where Atomics.wait
+          // was not supported or only waited for whole milliseconds.
+          while (endTime > getNow()) {}
         }
 
         // Write an event to the out buffer

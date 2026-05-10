@@ -133,8 +133,9 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     default_allow_fds: Array<number>,
     allocator_size?: number,
     max_fds_len?: number,
+    unknown_fn?: ((arg: unknown) => Promise<unknown> | unknown) | null,
   ) {
-    super(fds, stdin, stdout, stderr, default_allow_fds);
+    super(fds, stdin, stdout, stderr, default_allow_fds, unknown_fn);
 
     if (allocator_size === undefined) {
       this.allocator = new AllocatorUseArrayBuffer();
@@ -156,7 +157,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     Atomics.store(view, 1, 0);
 
     this.fd_close_receiver = new FdCloseSenderUseArrayBuffer();
-    this.base_func_util = new SharedArrayBuffer(28);
+    this.base_func_util = new SharedArrayBuffer(32);
   }
 
   /** Destroy this instance. */
@@ -333,6 +334,29 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
           Atomics.store(lock_view, 2, 0);
           Atomics.notify(lock_view, 2, 1);
           return;
+        }
+        case 2: {
+          const arg_ptr = Atomics.load(lock_view, 4);
+          const arg_len = Atomics.load(lock_view, 5);
+          const arg_data = this.allocator.get_memory(arg_ptr, arg_len);
+          const arg_str = new TextDecoder().decode(new Uint8Array(arg_data));
+          this.allocator.free(arg_ptr, arg_len);
+          const arg = JSON.parse(arg_str);
+
+          let ret: unknown;
+          if (this.unknown_fn) {
+            ret = await this.unknown_fn(arg);
+          }
+
+          if (ret !== undefined) {
+            const ret_str = JSON.stringify(ret);
+            const ret_bytes = new TextEncoder().encode(ret_str);
+            await this.allocator.async_write(ret_bytes, this.base_func_util, 6);
+          } else {
+            Atomics.store(lock_view, 6, 0);
+            Atomics.store(lock_view, 7, 0);
+          }
+          break;
         }
       }
 
@@ -524,7 +548,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
           );
           this.allocator.free(iovs_ptr, iovs_ptr_len);
 
-          const iovecs = new Array<wasi.Iovec>();
+          const iovecs: wasi.Iovec[] = [];
           for (let i = 0; i < iovs_ptr_len; i += 8) {
             const iovec = new wasi.Iovec();
             iovec.buf = data[i * 2];
@@ -627,7 +651,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
 
           // console.log("fd_read: park: iovs", iovs);
 
-          const iovecs = new Array<wasi.Iovec>();
+          const iovecs: wasi.Iovec[] = [];
           for (let i = 0; i < iovs_ptr_len; i += 8) {
             const iovec = new wasi.Iovec();
             iovec.buf = iovs[i * 2];

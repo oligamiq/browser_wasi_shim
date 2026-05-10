@@ -203,4 +203,6 @@ export abstract class WASIFarmRef {
   abstract path_unlink_file(fd: number | undefined, path: Uint8Array): number;
 
   abstract destroy_park(): void;
+
+  abstract call_unknown_fn(arg: unknown): unknown;
 }

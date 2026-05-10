@@ -35,6 +35,10 @@ export class WASIFarmAnimal {
 
   private can_array_buffer;
 
+  // Dedicated buffer for Atomics.wait-based sleep in poll_oneoff.
+  // Using a class field avoids allocating a new SharedArrayBuffer on every call.
+  private sleepBuffer = new Int32Array(new SharedArrayBuffer(4));
+
   private can_thread_spawn?: boolean;
 
   private thread_spawner?: ThreadSpawner;
@@ -126,6 +130,14 @@ export class WASIFarmAnimal {
   }) {
     this.inst = instance;
     instance.exports._start();
+  }
+
+  /**
+   *
+   * This function only initializes the instance and does not start the execution.
+   */
+  initialize_only(instance: { exports: { memory: WebAssembly.Memory } }) {
+    this.inst = instance;
   }
 
   /** Start a WASI command on a thread.
@@ -426,6 +438,14 @@ export class WASIFarmAnimal {
     this.destroy();
   }
 
+  /// Call unknown_fn on the WASIFarm with the given index
+  call_unknown_fn(idx: number, unknown: unknown): unknown {
+    if (idx < 0 || idx >= this.wasi_farm_refs.length) {
+      throw new Error(`wasi_farm_refs index ${idx} is out of bounds.`);
+    }
+    return this.wasi_farm_refs[idx].call_unknown_fn(unknown);
+  }
+
   /// Kill the Animal with the given ID on another thread
   kill_animal(id: number) {
     this.thread_spawner?.kill_animal(id);
@@ -625,7 +645,7 @@ export class WASIFarmAnimal {
           let monotonic_time: bigint;
           try {
             monotonic_time = BigInt(Math.round(performance.now() * 1000000));
-          } catch (e) {
+          } catch (_e) {
             // performance.now() is only available in browsers.
             // TODO use the perf_hooks builtin module for NodeJS
             monotonic_time = 0n;
@@ -1389,8 +1409,18 @@ export class WASIFarmAnimal {
           ((s.flags & wasi.SUBCLOCKFLAGS_SUBSCRIPTION_CLOCK_ABSTIME) !== 0
             ? timeout
             : getNow() + timeout) - s.precision;
-        while (endTime > getNow()) {
-          // block until the timeout is reached
+        // Recalculate remaining time right before blocking to account for
+        // overhead incurred during subscription parsing and clock selection.
+        const remainingNs = endTime - getNow();
+        if (remainingNs > 0n) {
+          const remainingMs = Number(remainingNs / 1_000_000n);
+          if (remainingMs > 0) {
+            // Atomics.wait blocks the current thread efficiently without
+            // busy-waiting. This works because animals.ts always runs in a
+            // Worker thread where Atomics.wait is permitted, and
+            // SharedArrayBuffer is guaranteed available (checked in constructor).
+            Atomics.wait(self.sleepBuffer, 0, 0, remainingMs);
+          }
         }
 
         // Write an event to the out buffer
