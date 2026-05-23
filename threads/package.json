@@ -1,6 +1,6 @@
 {
   "name": "@oligami/browser_wasi_shim-threads",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -18,14 +18,14 @@
   "devDependencies": {
     "@biomejs/biome": "2.2.4",
     "@swc-node/register": "^1.11.1",
-    "@swc/cli": "^0.7.8",
-    "@swc/core": "^1.13.5",
+    "@swc/cli": "^0.7.10",
+    "@swc/core": "^1.15.33",
     "better-typescript-lib": "^2.12.0",
     "npm-watch": "^0.13.0",
-    "puppeteer": "^24.42.0",
-    "typescript": "^5.9.2",
-    "unplugin-swc": "^1.5.7",
-    "vite": "^7.1.6",
+    "puppeteer": "^24.43.1",
+    "typescript": "^5.9.3",
+    "unplugin-swc": "^1.5.9",
+    "vite": "^7.3.3",
     "vite-plugin-dts": "^4.5.4"
   },
   "dependencies": {
