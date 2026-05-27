@@ -199,8 +199,8 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     this.call_base_func();
     this.wait_base_func();
 
-    const ret_ptr = Atomics.load(view, 3);
-    const ret_len = Atomics.load(view, 4);
+    const ret_ptr = Atomics.load(view, 1);
+    const ret_len = Atomics.load(view, 2);
 
     let ret: unknown;
     if (ret_len > 0) {

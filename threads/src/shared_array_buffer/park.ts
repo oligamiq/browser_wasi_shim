@@ -94,7 +94,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
   private fd_func_sig: SharedArrayBuffer;
 
   // listen base handle keep
-  // @ts-ignore
+  // @ts-expect-error
   private listen_base_handle: Promise<void> | undefined | null;
 
   private listen_base_terminator: (() => void) | undefined | null;
@@ -351,10 +351,10 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
           if (ret !== undefined) {
             const ret_str = JSON.stringify(ret);
             const ret_bytes = new TextEncoder().encode(ret_str);
-            await this.allocator.async_write(ret_bytes, this.base_func_util, 6);
+            await this.allocator.async_write(ret_bytes, this.base_func_util, 4);
           } else {
-            Atomics.store(lock_view, 6, 0);
-            Atomics.store(lock_view, 7, 0);
+            Atomics.store(lock_view, 4, 0);
+            Atomics.store(lock_view, 5, 0);
           }
           break;
         }
