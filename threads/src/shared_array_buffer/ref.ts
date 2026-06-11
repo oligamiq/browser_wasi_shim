@@ -10,6 +10,10 @@ import {
   type FdCloseSenderUseArrayBufferObject,
 } from "./fd_close_sender.ts";
 import { fd_func_sig_bytes, fd_func_sig_u32_size } from "./park.ts";
+import {
+  encodeStrictJsonValue,
+  decodeStrictJsonValue,
+} from "../codec/index.ts";
 
 /**
  * Represents the serialized state of a WASIFarmRefUseArrayBuffer for thread transfer.
@@ -192,15 +196,14 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     this.lock_base_func();
     const view = this.base_func_park_locker();
     Atomics.store(view, 0, 2);
-    const arg_str = JSON.stringify(arg);
-    const arg_bytes = new TextEncoder().encode(arg_str);
+    const arg_bytes = encodeStrictJsonValue(arg);
     this.allocator.block_write(arg_bytes, this.base_func_util, 3 + 1);
 
     this.call_base_func();
     this.wait_base_func();
 
-    const ret_ptr = Atomics.load(view, 3);
-    const ret_len = Atomics.load(view, 4);
+    const ret_ptr = Atomics.load(view, 1);
+    const ret_len = Atomics.load(view, 2);
 
     let ret: unknown;
     if (ret_len > 0) {
@@ -208,8 +211,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
         this.allocator.get_memory(ret_ptr, ret_len),
       );
       this.allocator.free(ret_ptr, ret_len);
-      const ret_str = new TextDecoder().decode(ret_bytes);
-      ret = JSON.parse(ret_str);
+      ret = decodeStrictJsonValue(ret_bytes);
     }
 
     this.release_base_func();

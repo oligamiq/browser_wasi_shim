@@ -5,6 +5,10 @@ import { AllocatorUseArrayBuffer } from "./allocator.ts";
 import { FdCloseSenderUseArrayBuffer } from "./fd_close_sender.ts";
 import type { WASIFarmRefUseArrayBufferObject } from "./ref.ts";
 import { wrap_async } from "./util.ts";
+import {
+  encodeStrictJsonValue,
+  decodeStrictJsonValue,
+} from "../codec/index.ts";
 
 export const fd_func_sig_u32_size: number = 18;
 export const fd_func_sig_bytes: number = fd_func_sig_u32_size * 4;
@@ -94,7 +98,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
   private fd_func_sig: SharedArrayBuffer;
 
   // listen base handle keep
-  // @ts-ignore
+  // @ts-expect-error
   private listen_base_handle: Promise<void> | undefined | null;
 
   private listen_base_terminator: (() => void) | undefined | null;
@@ -339,9 +343,8 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
           const arg_ptr = Atomics.load(lock_view, 4);
           const arg_len = Atomics.load(lock_view, 5);
           const arg_data = this.allocator.get_memory(arg_ptr, arg_len);
-          const arg_str = new TextDecoder().decode(new Uint8Array(arg_data));
+          const arg = decodeStrictJsonValue(new Uint8Array(arg_data));
           this.allocator.free(arg_ptr, arg_len);
-          const arg = JSON.parse(arg_str);
 
           let ret: unknown;
           if (this.unknown_fn) {
@@ -349,12 +352,11 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
           }
 
           if (ret !== undefined) {
-            const ret_str = JSON.stringify(ret);
-            const ret_bytes = new TextEncoder().encode(ret_str);
-            await this.allocator.async_write(ret_bytes, this.base_func_util, 6);
+            const ret_bytes = encodeStrictJsonValue(ret);
+            await this.allocator.async_write(ret_bytes, this.base_func_util, 4);
           } else {
-            Atomics.store(lock_view, 6, 0);
-            Atomics.store(lock_view, 7, 0);
+            Atomics.store(lock_view, 4, 0);
+            Atomics.store(lock_view, 5, 0);
           }
           break;
         }
