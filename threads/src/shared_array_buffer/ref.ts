@@ -129,7 +129,20 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     return id;
   }
 
-  /** Registers this reference's fd mappings through the reserved system slot. */
+  /**
+   * Registers this reference ID in the Park's map for each supplied fd.
+   *
+   * This synchronous call blocks on `Atomics.wait`, so it must run in a Worker
+   * or another agent where blocking is allowed, never on the agent running the
+   * asynchronous Park listener. Repeating an fd already mapped to this
+   * instance's internal reference ID is idempotent. The transport copies the
+   * encoded fd words before publication; the caller retains no shared payload
+   * ownership after the call returns.
+   *
+   * Transport allocation, validation, cancellation, and destruction failures
+   * are thrown to the caller. The method changes only the Park's fd-reference
+   * map; it does not destroy or otherwise own the Park, Animal, or this ref.
+   */
   set_park_fds_map(fds: Array<number>): void {
     const words = new Uint32Array([this.id, ...fds]);
     const payload = new Uint8Array(
@@ -140,12 +153,39 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     this.baseCall.block_call(BaseCallOpcode.SetParkFdsMap, payload);
   }
 
-  /** Requests idempotent Park destruction through the reserved system slot. */
+  /**
+   * Requests destruction of this reference's Park and its owned listeners.
+   *
+   * This synchronous call blocks on `Atomics.wait`, so it must run in a Worker
+   * or another agent where blocking is allowed, never on the Park listener's
+   * agent. Destruction is idempotent, including concurrent owner-side and wire
+   * requests. The empty request carries no caller-owned shared payload, and the
+   * transport releases its request storage before returning.
+   *
+   * Capacity or transport failures before idempotent destruction handling may
+   * throw; cancellation caused by an already-destroyed Park completes
+   * idempotently. This method does not destroy the calling ref, its Animal, or
+   * external Workers that hold another reference.
+   */
   destroy_park(): void {
     this.baseCall.block_call(BaseCallOpcode.DestroyPark, new Uint8Array());
   }
 
-  /** Invokes the host callback through a bounded user slot. */
+  /**
+   * Invokes the Park's configured unknown-function callback with `arg`.
+   *
+   * This synchronous call blocks on `Atomics.wait`, so it must run in a Worker
+   * or another agent where blocking is allowed, never on the agent running the
+   * asynchronous Park listener. Calls are not idempotent: a dispatched callback
+   * may have side effects and must not be retried blindly. Arguments are strictly
+   * encoded and copied into transport-owned storage. An `undefined` callback
+   * result is returned without decoding; otherwise response bytes are copied out
+   * and their shared allocation is released before this method decodes them.
+   *
+   * Bounded-capacity, strict-codec, remote callback, allocation, cancellation,
+   * and destruction failures are thrown to the caller. The method invokes only
+   * the callback and does not destroy the Park, Animal, or this ref.
+   */
   call_unknown_fn(arg: unknown): unknown {
     const arg_bytes = encodeStrictJsonValue(arg);
     const ret_bytes = this.baseCall.block_call(
