@@ -119,7 +119,7 @@ type BaseCallTransportObject = {
   userSlotCount: number;
   control: SharedArrayBuffer;
   slots: SharedArrayBuffer;
-  allocator: AllocatorUseArrayBufferObject;
+  allocator: BaseCallAllocatorUseArrayBufferObject;
 };
 ```
 
@@ -240,6 +240,11 @@ The Park dispatcher repeatedly:
 6. Continues accepting ready slots.
 7. Waits asynchronously on the request epoch only after a final rescan.
 
+The dispatcher captures the request epoch before that final scan. If the scan
+finds no work, it waits on exactly the captured value. A request published
+between the capture and the wait either appears in the scan or changes the
+epoch so `Atomics.waitAsync` returns immediately.
+
 Slot metadata is read with `Atomics.load()` after the dispatcher successfully
 claims `READY -> RUNNING`. Response metadata is written with `Atomics.store()`
 before publishing a terminal state.
@@ -317,6 +322,16 @@ Every published request reaches one terminal result:
 - Out-of-memory error.
 - Invalid operation or request error.
 
+Serialized remote errors use allocator-backed pointer/length fields.
+Out-of-memory, invalid-request, destroyed, and cancellation results use numeric
+terminal codes in slot metadata with zero pointer/length, so reporting an
+allocator failure never requires another allocation.
+
+Result or error codec failure uses an allocation-free `CodecError` terminal
+code. Error normalization keeps only bounded string `name`, `message`, `stack`,
+and `cause` fields and omits absent fields, so the strict codec never receives
+`undefined` or an arbitrary circular cause.
+
 Handler errors never reject the dispatcher loop or leave a caller blocked.
 Remote errors retain the existing serialized error shape and are reconstructed
 as thrown errors by synchronous callers.
@@ -350,8 +365,11 @@ Specifically:
 No existing destroy-series function is removed, renamed, or converted into a
 deprecated alias.
 
-Farm destruction is serialized by the Park dispatcher to avoid races between
-slot claiming and cancellation:
+Farm destruction is serialized through one internal
+`beginDestroy(origin?)` operation to avoid races between slot claiming and
+cancellation. Owner-side `WASIFarm.destroy()` calls it without an origin;
+wire-side `destroy_park()` supplies its validated system-slot index and
+generation.
 
 1. `destroy_park()` claims the reserved system slot and publishes a destroy
    request.
@@ -360,21 +378,27 @@ slot claiming and cancellation:
 3. New user-slot reservations reject after observing the lifecycle. A caller
    already in `WRITING` must recheck lifecycle before publishing and clean up
    locally.
-4. The Park dispatcher stops claiming new ready user slots. It walks every
-   slot once. A writing slot becomes cancelled but retains caller ownership of
-   its incomplete request. A ready slot becomes cancelled after the Park frees
-   its request payload. A running slot becomes cancelled. Every affected
-   caller is notified. Because slot reservation precedes the caller's mandatory
-   lifecycle recheck and publication uses CAS, every reservation concurrent
-   with the lifecycle transition is either present in this walk or cleans
-   itself up after observing destruction.
+4. The Park dispatcher stops claiming new ready user slots. For each slot, it
+   reloads state and retries CAS until that slot is stable. A writing slot uses
+   `WRITING -> CANCELLED` and retains caller ownership of its incomplete
+   request. A ready slot uses `READY -> RUNNING` to transfer ownership to the
+   Park, frees its request payload, then publishes `CANCELLED`. A running slot
+   uses `RUNNING -> CANCELLED`. Free, retired, cancelled, done, and error states
+   are already stable. Every affected caller is notified. Because reservation
+   precedes the caller's mandatory lifecycle recheck and every transition is a
+   CAS, a concurrent `WRITING -> READY` publication either loses and cleans up
+   caller-owned memory or is observed by the Park's retry loop.
 5. Done/error callers remain responsible for consuming and freeing their
    already published payloads.
 6. The dispatcher marks the lifecycle destroyed and notifies the request,
    free-slot, and every slot futex.
-7. The dispatcher publishes `DONE` to the reserved destroy system slot only
-   after the destroyed lifecycle and all cancellation notifications are
-   visible.
+7. If destruction originated from the reserved destroy system slot, that exact
+   slot/generation is excluded from cancellation. The dispatcher publishes
+   `DONE` to it only after the destroyed lifecycle and all other cancellation
+   notifications are visible. Owner-origin destruction has no acknowledgement
+   slot. A caller that loses the lifecycle CAS receives the destroyed terminal
+   result or returns idempotently, according to whether it is wire-side or
+   owner-side.
 8. The requesting caller returns the system slot to `FREE`, after which the
    Park stops intake listener bookkeeping.
 
@@ -384,6 +408,12 @@ validates lifecycle, generation, and slot state, frees its result, and discards
 it. SharedArrayBuffer storage remains valid for these late closures until
 JavaScript garbage collection, so acknowledgement does not expose freed native
 memory.
+
+The platform does not notify a SAB transport when an arbitrary caller Worker is
+forcibly terminated. If termination occurs while that Worker owns a slot, the
+slot remains unavailable until `WASIFarm.destroy()` cancels and reclaims the
+farm transport. Callers that control Worker lifetime must either terminate only
+after a base call returns or destroy the farm as part of abnormal cleanup.
 
 ## DocComments
 
