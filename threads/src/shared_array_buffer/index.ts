@@ -5,12 +5,18 @@
  * components, enabling efficient cross-thread communication using atomics.
  */
 import { WASIFarmParkUseArrayBuffer } from "./park.ts";
+import {
+  BaseCallAllocatorUseArrayBuffer,
+  type BaseCallAllocatorUseArrayBufferObject,
+} from "./base_call_allocator.ts";
 import { WASIFarmRefUseArrayBuffer } from "./ref.ts";
 import type { WASIFarmRefUseArrayBufferObject } from "./ref.ts";
 import { ThreadSpawner } from "./thread_spawn.ts";
 import { thread_spawn_on_worker } from "./thread_spawn.ts";
 
 export {
+  BaseCallAllocatorUseArrayBuffer,
+  type BaseCallAllocatorUseArrayBufferObject,
   WASIFarmRefUseArrayBuffer,
   type WASIFarmRefUseArrayBufferObject,
   WASIFarmParkUseArrayBuffer,
