@@ -6,6 +6,7 @@ import {
   BaseCallParkUseArrayBuffer,
   BaseCallRefUseArrayBuffer,
   type BaseCallTransportObject,
+  baseCallTestHooks,
 } from "./base_call.ts";
 import { BaseCallAllocatorUseArrayBuffer } from "./base_call_allocator.ts";
 import * as sharedArrayBuffer from "./index.ts";
@@ -77,6 +78,30 @@ function terminalMessage(reason: unknown): string {
     : String(reason);
 }
 
+function nextWorkerMessage(
+  worker: Worker,
+): Promise<
+  | { type: "result" }
+  | { type: "error"; error: { name: string; message: string } }
+> {
+  return new Promise((resolve, reject) => {
+    const onMessage = (event: MessageEvent) => {
+      cleanup();
+      resolve(event.data);
+    };
+    const onError = (event: ErrorEvent) => {
+      cleanup();
+      reject(event.error ?? new Error(event.message));
+    };
+    const cleanup = () => {
+      worker.removeEventListener("message", onMessage);
+      worker.removeEventListener("error", onError);
+    };
+    worker.addEventListener("message", onMessage);
+    worker.addEventListener("error", onError);
+  });
+}
+
 test("exports the v2 base call transport", () => {
   assert.strictEqual(
     typeof (sharedArrayBuffer as Record<string, unknown>)
@@ -91,6 +116,10 @@ test("exports the v2 base call transport", () => {
   assert.strictEqual(
     typeof (sharedArrayBuffer as Record<string, unknown>).BaseCallCapacityError,
     "function",
+  );
+  assert.strictEqual(
+    (sharedArrayBuffer as Record<string, unknown>).baseCallTestHooks,
+    undefined,
   );
 });
 
@@ -164,12 +193,17 @@ test("concurrent calls remain correlated when handlers finish in reverse order",
 });
 
 test("wait-before-notify completes", async () => {
+  let observeWait = () => {};
+  const waitObserved = new Promise<void>((resolve) => {
+    observeWait = resolve;
+  });
+  baseCallTestHooks.beforeDispatcherWait = observeWait;
   const park = new BaseCallParkUseArrayBuffer((_opcode, payload) => payload, {
     maxBaseCalls: 1,
     allocatorBytes: 128,
   });
   park.listen();
-  await new Promise((resolve) => setTimeout(resolve, 5));
+  await within(waitObserved);
   const ref = BaseCallRefUseArrayBuffer.init_self(park.get_object());
 
   try {
@@ -183,6 +217,7 @@ test("wait-before-notify completes", async () => {
       [7],
     );
   } finally {
+    baseCallTestHooks.beforeDispatcherWait = undefined;
     park.destroy();
   }
 });
@@ -260,6 +295,141 @@ test("retires a slot instead of wrapping its generation", () => {
   );
   assert.strictEqual(Atomics.load(slots, base + SLOT_STATE), RETIRED);
   park.destroy();
+});
+
+test("async user calls reject when all user slots are retired", async () => {
+  const park = new BaseCallParkUseArrayBuffer(() => undefined, {
+    maxBaseCalls: 2,
+    allocatorBytes: 64,
+  });
+  const object = park.get_object();
+  const slots = new Int32Array(object.slots);
+  Atomics.store(slots, slotOffset(1) + SLOT_STATE, RETIRED);
+  Atomics.store(slots, slotOffset(2) + SLOT_STATE, RETIRED);
+  const ref = BaseCallRefUseArrayBuffer.init_self(object);
+
+  try {
+    await assert.rejects(
+      within(ref.async_call(BaseCallOpcode.CallUnknownFn, new Uint8Array())),
+      BaseCallCapacityError,
+    );
+  } finally {
+    park.destroy();
+  }
+});
+
+test("async system calls reject when the system slot is retired", async () => {
+  const park = new BaseCallParkUseArrayBuffer(() => undefined, {
+    maxBaseCalls: 1,
+    allocatorBytes: 64,
+  });
+  const object = park.get_object();
+  Atomics.store(new Int32Array(object.slots), SLOT_STATE, RETIRED);
+  const ref = BaseCallRefUseArrayBuffer.init_self(object);
+
+  try {
+    await assert.rejects(
+      within(ref.async_call(BaseCallOpcode.DestroyPark, new Uint8Array())),
+      BaseCallCapacityError,
+    );
+  } finally {
+    park.destroy();
+  }
+});
+
+test("blocking system calls reject when the system slot is retired", async () => {
+  const park = new BaseCallParkUseArrayBuffer(() => undefined, {
+    maxBaseCalls: 1,
+    allocatorBytes: 64,
+  });
+  const object = park.get_object();
+  Atomics.store(new Int32Array(object.slots), SLOT_STATE, RETIRED);
+  const worker = new Worker(
+    new URL("./test_workers/base_call_block_worker.ts", import.meta.url).href,
+    { type: "module" },
+  );
+
+  try {
+    const message = nextWorkerMessage(worker);
+    worker.postMessage(object);
+    assert.deepStrictEqual(await within(message), {
+      type: "error",
+      error: {
+        name: "BaseCallCapacityError",
+        message: "base call user-slot capacity is exhausted",
+      },
+    });
+  } finally {
+    worker.terminate();
+    park.destroy();
+  }
+});
+
+test("two references cannot reuse a generation after a pre-claim interleaving", () => {
+  const park = new BaseCallParkUseArrayBuffer(() => undefined, {
+    maxBaseCalls: 1,
+    allocatorBytes: 64,
+  });
+  const object = park.get_object();
+  const first = BaseCallRefUseArrayBuffer.init_self(object);
+  const second = BaseCallRefUseArrayBuffer.init_self(object);
+  type ClaimingRef = {
+    tryClaimUserSlot(): { slotIndex: number; generation: number } | undefined;
+    releaseWritingSlot(identity: {
+      slotIndex: number;
+      generation: number;
+    }): void;
+  };
+  const firstClaiming = first as unknown as ClaimingRef;
+  const secondClaiming = second as unknown as ClaimingRef;
+  let secondIdentity: { slotIndex: number; generation: number } | undefined;
+
+  baseCallTestHooks.beforeUserSlotClaim = () => {
+    baseCallTestHooks.beforeUserSlotClaim = undefined;
+    secondIdentity = secondClaiming.tryClaimUserSlot();
+    assert(secondIdentity);
+    secondClaiming.releaseWritingSlot(secondIdentity);
+  };
+
+  let firstIdentity: { slotIndex: number; generation: number } | undefined;
+  try {
+    firstIdentity = firstClaiming.tryClaimUserSlot();
+    assert(secondIdentity);
+    assert(firstIdentity);
+    assert.strictEqual(secondIdentity.generation, 1);
+    assert.strictEqual(firstIdentity.generation, 2);
+  } finally {
+    baseCallTestHooks.beforeUserSlotClaim = undefined;
+    if (firstIdentity !== undefined) {
+      firstClaiming.releaseWritingSlot(firstIdentity);
+    }
+    park.destroy();
+  }
+});
+
+test("each reference advances its own round-robin user slot hint", async () => {
+  const park = new BaseCallParkUseArrayBuffer((_opcode, payload) => payload, {
+    maxBaseCalls: 3,
+    allocatorBytes: 128,
+  });
+  park.listen();
+  const object = park.get_object();
+  const first = BaseCallRefUseArrayBuffer.init_self(object);
+  const second = BaseCallRefUseArrayBuffer.init_self(object);
+  const attemptedSlots: number[] = [];
+  baseCallTestHooks.beforeUserSlotClaim = (slotIndex) => {
+    attemptedSlots.push(slotIndex);
+  };
+
+  try {
+    await first.async_call(BaseCallOpcode.CallUnknownFn, new Uint8Array([1]));
+    await first.async_call(BaseCallOpcode.CallUnknownFn, new Uint8Array([2]));
+    await second.async_call(BaseCallOpcode.CallUnknownFn, new Uint8Array([3]));
+    assert.deepStrictEqual(attemptedSlots, [1, 2, 1]);
+  } finally {
+    baseCallTestHooks.beforeUserSlotClaim = undefined;
+    park.destroy();
+  }
 });
 
 test("stale generation cannot publish after actual slot reuse", async () => {
@@ -413,6 +583,76 @@ test("allocator OOM publishes an allocation-free terminal error", async () => {
       (reason) => /OutOfMemory/i.test(terminalMessage(reason)),
     );
     assert.strictEqual(Atomics.load(allocatorWords, 2), 0);
+  } finally {
+    park.destroy();
+  }
+});
+
+test("user request OOM releases Writing and wakes a capacity waiter", async () => {
+  const park = new BaseCallParkUseArrayBuffer((_opcode, payload) => payload, {
+    maxBaseCalls: 1,
+    allocatorBytes: 64,
+  });
+  park.listen();
+  const object = park.get_object();
+  const slots = new Int32Array(object.slots);
+  const stateIndex = slotOffset(1) + SLOT_STATE;
+  const allocatorWords = new Int32Array(object.allocator.share_arrays_memory);
+  const ref = BaseCallRefUseArrayBuffer.init_self(object);
+  Atomics.store(allocatorWords, 0, 1);
+  const exhausted = ref.async_call(
+    BaseCallOpcode.CallUnknownFn,
+    new Uint8Array(33),
+  );
+  await waitUntil(() => Atomics.load(slots, stateIndex) === WRITING);
+  const waiting = ref.async_call(
+    BaseCallOpcode.CallUnknownFn,
+    new Uint8Array([7]),
+  );
+
+  try {
+    Atomics.store(allocatorWords, 0, 0);
+    Atomics.notify(allocatorWords, 0);
+    await assert.rejects(within(exhausted), /OutOfMemory/i);
+    assert.deepStrictEqual(Array.from((await within(waiting)) ?? []), [7]);
+    assert.strictEqual(Atomics.load(slots, stateIndex), FREE);
+    assert.strictEqual(Atomics.load(allocatorWords, 2), 0);
+  } finally {
+    Atomics.store(allocatorWords, 0, 0);
+    Atomics.notify(allocatorWords, 0);
+    park.destroy();
+    await Promise.allSettled([exhausted, waiting]);
+  }
+});
+
+test("system request OOM releases Writing for later system reuse", async () => {
+  const park = new BaseCallParkUseArrayBuffer((_opcode, payload) => payload, {
+    maxBaseCalls: 1,
+    allocatorBytes: 64,
+  });
+  const object = park.get_object();
+  const slots = new Int32Array(object.slots);
+  const allocatorWords = new Int32Array(object.allocator.share_arrays_memory);
+  const ref = BaseCallRefUseArrayBuffer.init_self(object);
+
+  try {
+    assert.throws(
+      () => ref.block_call(BaseCallOpcode.SetParkFdsMap, new Uint8Array(33)),
+      /OutOfMemory/i,
+    );
+    assert.strictEqual(Atomics.load(slots, SLOT_STATE), FREE);
+    assert.strictEqual(Atomics.load(allocatorWords, 2), 0);
+
+    park.listen();
+    assert.deepStrictEqual(
+      Array.from(
+        (await ref.async_call(
+          BaseCallOpcode.SetParkFdsMap,
+          new Uint8Array([8]),
+        )) ?? [],
+      ),
+      [8],
+    );
   } finally {
     park.destroy();
   }
@@ -636,6 +876,89 @@ test("destroy cancels running calls and discards late completion", async () => {
     Atomics.load(new Int32Array(object.allocator.share_arrays_memory), 2),
     0,
   );
+});
+
+test("wire destroy is idempotent when owner destroy wins while Ready", async () => {
+  const park = new BaseCallParkUseArrayBuffer(() => undefined, {
+    maxBaseCalls: 1,
+    allocatorBytes: 64,
+  });
+  const object = park.get_object();
+  const slots = new Int32Array(object.slots);
+  const ref = BaseCallRefUseArrayBuffer.init_self(object);
+  const wireDestroy = ref.async_call(
+    BaseCallOpcode.DestroyPark,
+    new Uint8Array(),
+  );
+
+  try {
+    await waitUntil(() => Atomics.load(slots, SLOT_STATE) === READY);
+    park.destroy();
+    assert.strictEqual(await within(wireDestroy), undefined);
+    assert.strictEqual(Atomics.load(slots, SLOT_STATE), FREE);
+  } finally {
+    park.destroy();
+    await Promise.allSettled([wireDestroy]);
+  }
+});
+
+test("wire destroy is idempotent when owner destroy wins while Running", async () => {
+  let hookCalls = 0;
+  const park = new BaseCallParkUseArrayBuffer(() => undefined, {
+    maxBaseCalls: 1,
+    allocatorBytes: 64,
+  });
+  baseCallTestHooks.beforeWireDestroy = () => {
+    hookCalls++;
+    baseCallTestHooks.beforeWireDestroy = undefined;
+    park.destroy();
+  };
+  park.listen();
+  const ref = BaseCallRefUseArrayBuffer.init_self(park.get_object());
+
+  try {
+    assert.strictEqual(
+      await within(
+        ref.async_call(BaseCallOpcode.DestroyPark, new Uint8Array()),
+      ),
+      undefined,
+    );
+    assert.strictEqual(hookCalls, 1);
+  } finally {
+    baseCallTestHooks.beforeWireDestroy = undefined;
+    park.destroy();
+  }
+});
+
+test("two in-flight wire destroys both complete idempotently", async () => {
+  const park = new BaseCallParkUseArrayBuffer(() => undefined, {
+    maxBaseCalls: 1,
+    allocatorBytes: 64,
+  });
+  const object = park.get_object();
+  const slots = new Int32Array(object.slots);
+  const firstRef = BaseCallRefUseArrayBuffer.init_self(object);
+  const secondRef = BaseCallRefUseArrayBuffer.init_self(object);
+  const first = firstRef.async_call(
+    BaseCallOpcode.DestroyPark,
+    new Uint8Array(),
+  );
+  await waitUntil(() => Atomics.load(slots, SLOT_STATE) === READY);
+  const second = secondRef.async_call(
+    BaseCallOpcode.DestroyPark,
+    new Uint8Array(),
+  );
+  park.listen();
+
+  try {
+    assert.deepStrictEqual(await within(Promise.all([first, second])), [
+      undefined,
+      undefined,
+    ]);
+  } finally {
+    park.destroy();
+    await Promise.allSettled([first, second]);
+  }
 });
 
 test("duplicate owner and wire destroy are idempotent with one origin ack", async () => {

@@ -65,6 +65,13 @@ type NormalizedError = {
   cause?: JsonValue;
 };
 
+/** @internal Observable synchronization points used only by transport tests. */
+export const baseCallTestHooks: {
+  beforeUserSlotClaim?: (slotIndex: number) => void;
+  beforeDispatcherWait?: () => void;
+  beforeWireDestroy?: () => void;
+} = {};
+
 /**
  * Cloneable version-2 base-call state shared by one Park and its references.
  *
@@ -136,6 +143,7 @@ export class BaseCallRefUseArrayBuffer {
   private readonly slots: Int32Array;
   private readonly allocator: BaseCallAllocatorUseArrayBuffer;
   private readonly userSlotCount: number;
+  private userSlotScanHint = 1;
 
   private constructor(
     control: Int32Array,
@@ -241,7 +249,7 @@ export class BaseCallRefUseArrayBuffer {
     }
 
     this.publishBlocking(identity, opcode, payload);
-    return this.waitForTerminalBlocking(identity);
+    return this.waitForTerminalBlocking(identity, opcode);
   }
 
   /**
@@ -265,7 +273,7 @@ export class BaseCallRefUseArrayBuffer {
     }
 
     await this.publishAsync(identity, opcode, payload);
-    return await this.waitForTerminalAsync(identity);
+    return await this.waitForTerminalAsync(identity, opcode);
   }
 
   private validatePayload(payload: Uint8Array): void {
@@ -288,22 +296,20 @@ export class BaseCallRefUseArrayBuffer {
     ) {
       return undefined;
     }
-    for (let slotIndex = 1; slotIndex <= this.userSlotCount; slotIndex++) {
+    let retiredCount = 0;
+    const scanStart = this.userSlotScanHint;
+    for (let offset = 0; offset < this.userSlotCount; offset++) {
+      const slotIndex = ((scanStart - 1 + offset) % this.userSlotCount) + 1;
       const stateIndex = this.slotWord(slotIndex, SLOT_STATE);
-      if (Atomics.load(this.slots, stateIndex) !== SlotState.Free) {
+      const state = Atomics.load(this.slots, stateIndex);
+      if (state === SlotState.Retired) {
+        retiredCount++;
         continue;
       }
-      const generationIndex = this.slotWord(slotIndex, SLOT_GENERATION);
-      const generation = Atomics.load(this.slots, generationIndex);
-      if (generation >= MAX_GENERATION) {
-        Atomics.compareExchange(
-          this.slots,
-          stateIndex,
-          SlotState.Free,
-          SlotState.Retired,
-        );
+      if (state !== SlotState.Free) {
         continue;
       }
+      baseCallTestHooks.beforeUserSlotClaim?.(slotIndex);
       if (
         Atomics.compareExchange(
           this.slots,
@@ -314,10 +320,22 @@ export class BaseCallRefUseArrayBuffer {
       ) {
         continue;
       }
+      const generationIndex = this.slotWord(slotIndex, SLOT_GENERATION);
+      const generation = Atomics.load(this.slots, generationIndex);
+      if (generation >= MAX_GENERATION) {
+        Atomics.store(this.slots, stateIndex, SlotState.Retired);
+        retiredCount++;
+        this.notifySlotFreed(slotIndex);
+        continue;
+      }
       const nextGeneration = generation + 1;
       Atomics.store(this.slots, generationIndex, nextGeneration);
       this.clearSlotMetadata(slotIndex);
+      this.userSlotScanHint = (slotIndex % this.userSlotCount) + 1;
       return { slotIndex, generation: nextGeneration };
+    }
+    if (retiredCount === this.userSlotCount) {
+      throw new BaseCallCapacityError();
     }
     return undefined;
   }
@@ -350,6 +368,9 @@ export class BaseCallRefUseArrayBuffer {
       return undefined;
     }
     const stateIndex = this.slotWord(SYSTEM_SLOT, SLOT_STATE);
+    if (Atomics.load(this.slots, stateIndex) === SlotState.Retired) {
+      throw new BaseCallCapacityError();
+    }
     if (
       Atomics.compareExchange(
         this.slots,
@@ -365,7 +386,7 @@ export class BaseCallRefUseArrayBuffer {
     if (generation >= MAX_GENERATION) {
       Atomics.store(this.slots, stateIndex, SlotState.Retired);
       Atomics.notify(this.slots, stateIndex);
-      return undefined;
+      throw new BaseCallCapacityError();
     }
     const nextGeneration = generation + 1;
     Atomics.store(this.slots, generationIndex, nextGeneration);
@@ -427,6 +448,11 @@ export class BaseCallRefUseArrayBuffer {
     let allocation: [number, number] | undefined;
     try {
       allocation = this.allocator.block_write(payload);
+    } catch {
+      this.releaseWritingSlot(identity);
+      throw new BaseCallTerminalFailure(BaseCallTerminalError.OutOfMemory);
+    }
+    try {
       this.publishOwnedRequest(identity, opcode, allocation);
       allocation = undefined;
     } finally {
@@ -445,6 +471,11 @@ export class BaseCallRefUseArrayBuffer {
     let allocation: [number, number] | undefined;
     try {
       allocation = await this.allocator.async_write(payload);
+    } catch {
+      this.releaseWritingSlot(identity);
+      throw new BaseCallTerminalFailure(BaseCallTerminalError.OutOfMemory);
+    }
+    try {
       this.publishOwnedRequest(identity, opcode, allocation);
       allocation = undefined;
     } finally {
@@ -507,12 +538,13 @@ export class BaseCallRefUseArrayBuffer {
 
   private waitForTerminalBlocking(
     identity: SlotIdentity,
+    opcode: BaseCallOpcode,
   ): Uint8Array | undefined {
     const stateIndex = this.slotWord(identity.slotIndex, SLOT_STATE);
     while (true) {
       const state = Atomics.load(this.slots, stateIndex);
       if (isTerminalState(state)) {
-        return this.consumeTerminal(identity, state);
+        return this.consumeTerminal(identity, opcode, state);
       }
       this.assertGeneration(identity);
       Atomics.wait(this.slots, stateIndex, state);
@@ -521,12 +553,13 @@ export class BaseCallRefUseArrayBuffer {
 
   private async waitForTerminalAsync(
     identity: SlotIdentity,
+    opcode: BaseCallOpcode,
   ): Promise<Uint8Array | undefined> {
     const stateIndex = this.slotWord(identity.slotIndex, SLOT_STATE);
     while (true) {
       const state = Atomics.load(this.slots, stateIndex);
       if (isTerminalState(state)) {
-        return this.consumeTerminal(identity, state);
+        return this.consumeTerminal(identity, opcode, state);
       }
       this.assertGeneration(identity);
       await waitAsync(this.slots, stateIndex, state);
@@ -535,6 +568,7 @@ export class BaseCallRefUseArrayBuffer {
 
   private consumeTerminal(
     identity: SlotIdentity,
+    opcode: BaseCallOpcode,
     state: number,
   ): Uint8Array | undefined {
     this.assertGeneration(identity);
@@ -551,6 +585,9 @@ export class BaseCallRefUseArrayBuffer {
         return new Uint8Array(this.allocator.get_memory(pointer, length));
       }
       if (state === SlotState.Cancelled) {
+        if (opcode === BaseCallOpcode.DestroyPark) {
+          return undefined;
+        }
         throw new BaseCallTerminalFailure(BaseCallTerminalError.Destroyed);
       }
 
@@ -748,6 +785,7 @@ export class BaseCallParkUseArrayBuffer {
         await macrotaskYield();
         continue;
       }
+      baseCallTestHooks.beforeDispatcherWait?.();
       await waitAsync(this.control, CONTROL_REQUEST_EPOCH, observedEpoch);
     }
 
@@ -797,11 +835,9 @@ export class BaseCallParkUseArrayBuffer {
 
       if (slotIndex === SYSTEM_SLOT) {
         if (opcode === BaseCallOpcode.DestroyPark) {
+          baseCallTestHooks.beforeWireDestroy?.();
           if (!this.beginDestroy(identity)) {
-            this.publishTerminalError(
-              identity,
-              BaseCallTerminalError.Destroyed,
-            );
+            this.publishSuccess(identity, undefined);
           }
           continue;
         }
