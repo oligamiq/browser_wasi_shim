@@ -70,6 +70,10 @@ export const baseCallTestHooks: {
   beforeUserSlotClaim?: (slotIndex: number) => void;
   beforeDispatcherWait?: () => void;
   beforeWireDestroy?: () => void;
+  beforeRequestPublication?: (
+    slotIndex: number,
+    opcode: BaseCallOpcode,
+  ) => void;
 } = {};
 
 /**
@@ -106,12 +110,12 @@ export enum BaseCallTerminalError {
 }
 
 /**
- * Raised synchronously when all user slots are owned by other calls.
- * `async_call` can be used when waiting for capacity is acceptable.
+ * Raised when user slots are temporarily exhausted or when user or reserved
+ * system-slot capacity has been permanently retired.
  */
 export class BaseCallCapacityError extends Error {
   constructor() {
-    super("base call user-slot capacity is exhausted");
+    super("base call capacity is exhausted or permanently retired");
     this.name = "BaseCallCapacityError";
   }
 }
@@ -126,7 +130,7 @@ export type BaseCallHandler = (
 ) => Promise<Uint8Array | undefined> | Uint8Array | undefined;
 
 class BaseCallTerminalFailure extends Error {
-  constructor(status: BaseCallTerminalError) {
+  constructor(readonly status: BaseCallTerminalError) {
     super(`base call failed: ${BaseCallTerminalError[status]}`);
     this.name = `BaseCall${BaseCallTerminalError[status]}Error`;
   }
@@ -248,7 +252,14 @@ export class BaseCallRefUseArrayBuffer {
       throw new BaseCallCapacityError();
     }
 
-    this.publishBlocking(identity, opcode, payload);
+    try {
+      this.publishBlocking(identity, opcode, payload);
+    } catch (error) {
+      if (this.isIdempotentDestroyFailure(opcode, error)) {
+        return undefined;
+      }
+      throw error;
+    }
     return this.waitForTerminalBlocking(identity, opcode);
   }
 
@@ -272,7 +283,14 @@ export class BaseCallRefUseArrayBuffer {
       throw new BaseCallTerminalFailure(BaseCallTerminalError.Destroyed);
     }
 
-    await this.publishAsync(identity, opcode, payload);
+    try {
+      await this.publishAsync(identity, opcode, payload);
+    } catch (error) {
+      if (this.isIdempotentDestroyFailure(opcode, error)) {
+        return undefined;
+      }
+      throw error;
+    }
     return await this.waitForTerminalAsync(identity, opcode);
   }
 
@@ -286,6 +304,17 @@ export class BaseCallRefUseArrayBuffer {
     return (
       opcode === BaseCallOpcode.SetParkFdsMap ||
       opcode === BaseCallOpcode.DestroyPark
+    );
+  }
+
+  private isIdempotentDestroyFailure(
+    opcode: BaseCallOpcode,
+    error: unknown,
+  ): boolean {
+    return (
+      opcode === BaseCallOpcode.DestroyPark &&
+      error instanceof BaseCallTerminalFailure &&
+      error.status === BaseCallTerminalError.Destroyed
     );
   }
 
@@ -491,6 +520,7 @@ export class BaseCallRefUseArrayBuffer {
     opcode: BaseCallOpcode,
     allocation: [number, number],
   ): void {
+    baseCallTestHooks.beforeRequestPublication?.(identity.slotIndex, opcode);
     const base = this.slotWord(identity.slotIndex, 0);
     Atomics.store(this.slots, base + SLOT_OPCODE, opcode);
     Atomics.store(this.slots, base + SLOT_FLAGS, 0);

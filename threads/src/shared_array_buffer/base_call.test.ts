@@ -356,7 +356,7 @@ test("blocking system calls reject when the system slot is retired", async () =>
       type: "error",
       error: {
         name: "BaseCallCapacityError",
-        message: "base call user-slot capacity is exhausted",
+        message: "base call capacity is exhausted or permanently retired",
       },
     });
   } finally {
@@ -876,6 +876,74 @@ test("destroy cancels running calls and discards late completion", async () => {
     Atomics.load(new Int32Array(object.allocator.share_arrays_memory), 2),
     0,
   );
+});
+
+test("wire destroy is idempotent when owner destroy wins while Writing", async () => {
+  let hookCalls = 0;
+  const park = new BaseCallParkUseArrayBuffer(() => undefined, {
+    maxBaseCalls: 1,
+    allocatorBytes: 64,
+  });
+  const object = park.get_object();
+  const slots = new Int32Array(object.slots);
+  const allocatorWords = new Int32Array(object.allocator.share_arrays_memory);
+  const ref = BaseCallRefUseArrayBuffer.init_self(object);
+  baseCallTestHooks.beforeRequestPublication = (slotIndex, opcode) => {
+    if (slotIndex === 0 && opcode === BaseCallOpcode.DestroyPark) {
+      hookCalls++;
+      baseCallTestHooks.beforeRequestPublication = undefined;
+      park.destroy();
+    }
+  };
+  const wireDestroy = ref.async_call(
+    BaseCallOpcode.DestroyPark,
+    new Uint8Array([1]),
+  );
+
+  try {
+    assert.strictEqual(await within(wireDestroy), undefined);
+    assert.strictEqual(hookCalls, 1);
+    assert.strictEqual(Atomics.load(slots, SLOT_STATE), FREE);
+    assert.strictEqual(Atomics.load(allocatorWords, 2), 0);
+  } finally {
+    baseCallTestHooks.beforeRequestPublication = undefined;
+    park.destroy();
+    await Promise.allSettled([wireDestroy]);
+  }
+});
+
+test("non-destroy publication still rejects when owner wins while Writing", async () => {
+  let hookCalls = 0;
+  const park = new BaseCallParkUseArrayBuffer(() => undefined, {
+    maxBaseCalls: 1,
+    allocatorBytes: 64,
+  });
+  const object = park.get_object();
+  const slots = new Int32Array(object.slots);
+  const allocatorWords = new Int32Array(object.allocator.share_arrays_memory);
+  const ref = BaseCallRefUseArrayBuffer.init_self(object);
+  baseCallTestHooks.beforeRequestPublication = (slotIndex, opcode) => {
+    if (slotIndex === 0 && opcode === BaseCallOpcode.SetParkFdsMap) {
+      hookCalls++;
+      baseCallTestHooks.beforeRequestPublication = undefined;
+      park.destroy();
+    }
+  };
+  const call = ref.async_call(
+    BaseCallOpcode.SetParkFdsMap,
+    new Uint8Array([2]),
+  );
+
+  try {
+    await assert.rejects(within(call), /Destroyed/i);
+    assert.strictEqual(hookCalls, 1);
+    assert.strictEqual(Atomics.load(slots, SLOT_STATE), FREE);
+    assert.strictEqual(Atomics.load(allocatorWords, 2), 0);
+  } finally {
+    baseCallTestHooks.beforeRequestPublication = undefined;
+    park.destroy();
+    await Promise.allSettled([call]);
+  }
 });
 
 test("wire destroy is idempotent when owner destroy wins while Ready", async () => {
