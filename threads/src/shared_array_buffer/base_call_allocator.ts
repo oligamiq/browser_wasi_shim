@@ -151,11 +151,15 @@ export class BaseCallAllocatorUseArrayBuffer {
     this.with_blocking_lock((words) => {
       const blockOffset = this.find_allocated_block(words, pointer, length);
       const blockWord = blockOffset / 4;
+      const nextOffset = words[blockWord + 1];
+      if (nextOffset !== 0) {
+        this.validate_block(words, nextOffset);
+      }
+
       words[blockWord + 2] = 1;
       words[blockWord + 3] = 0;
       Atomics.sub(words, 2, 1);
 
-      const nextOffset = words[blockWord + 1];
       if (nextOffset !== 0) {
         const nextWord = nextOffset / 4;
         if (words[nextWord + 2] === 1) {
@@ -311,13 +315,21 @@ export class BaseCallAllocatorUseArrayBuffer {
     const blockWord = blockOffset / 4;
     const payloadSize = words[blockWord];
     const nextOffset = words[blockWord + 1];
+    const freeFlag = words[blockWord + 2];
+    const requestedLength = words[blockWord + 3];
+    const hasInvalidAllocationState =
+      (freeFlag !== 0 && freeFlag !== 1) ||
+      (freeFlag === 1 && requestedLength !== 0) ||
+      (freeFlag === 0 &&
+        (requestedLength < 1 || requestedLength > payloadSize));
     if (
       payloadSize < MIN_BLOCK_PAYLOAD_BYTES ||
       payloadSize % 8 !== 0 ||
       blockOffset + BLOCK_HEADER_BYTES + payloadSize >
         this.share_arrays_memory.byteLength ||
       (nextOffset !== 0 &&
-        nextOffset !== blockOffset + BLOCK_HEADER_BYTES + payloadSize)
+        nextOffset !== blockOffset + BLOCK_HEADER_BYTES + payloadSize) ||
+      hasInvalidAllocationState
     ) {
       throw new Error("corrupt allocator block header");
     }

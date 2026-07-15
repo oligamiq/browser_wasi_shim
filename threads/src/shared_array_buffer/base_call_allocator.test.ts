@@ -224,6 +224,65 @@ test("rejects reads outside the exact live allocation", () => {
   assert.throws(() => allocator.get_memory(...allocation), /freed/i);
 });
 
+test("rejects a malformed adjacent block before free mutates metadata", () => {
+  const allocator = new BaseCallAllocatorUseArrayBuffer(128);
+  const first = allocator.block_write(new Uint8Array(8));
+  const middle = allocator.block_write(new Uint8Array(8));
+  const last = allocator.block_write(new Uint8Array(8));
+  allocator.free(...middle);
+  const words = new Int32Array(allocator.share_arrays_memory);
+  const middleWord = (middle[0] - 16) / 4;
+  words[middleWord] = -8;
+  const expectedWords = Array.from(words);
+
+  assert.throws(() => allocator.get_memory(...last), /corrupt/i);
+  assert.deepStrictEqual(Array.from(words), expectedWords);
+  assert.throws(() => allocator.free(...first), /corrupt/i);
+  assert.deepStrictEqual(Array.from(words), expectedWords);
+});
+
+test("rejects invalid free flags without mutating metadata", () => {
+  const allocator = new BaseCallAllocatorUseArrayBuffer(64);
+  const allocation = allocator.block_write(new Uint8Array(8));
+  const words = new Int32Array(allocator.share_arrays_memory);
+  words[(allocation[0] - 16) / 4 + 2] = 2;
+  const expectedWords = Array.from(words);
+
+  assert.throws(() => allocator.get_memory(...allocation), /corrupt/i);
+  assert.deepStrictEqual(Array.from(words), expectedWords);
+  assert.throws(() => allocator.free(...allocation), /corrupt/i);
+  assert.deepStrictEqual(Array.from(words), expectedWords);
+});
+
+test("rejects nonzero free-block requested lengths without mutation", () => {
+  const allocator = new BaseCallAllocatorUseArrayBuffer(64);
+  const allocation = allocator.block_write(new Uint8Array(8));
+  allocator.free(...allocation);
+  const words = new Int32Array(allocator.share_arrays_memory);
+  words[(allocation[0] - 16) / 4 + 3] = allocation[1];
+  const expectedWords = Array.from(words);
+
+  assert.throws(() => allocator.get_memory(...allocation), /corrupt/i);
+  assert.deepStrictEqual(Array.from(words), expectedWords);
+  assert.throws(() => allocator.free(...allocation), /corrupt/i);
+  assert.deepStrictEqual(Array.from(words), expectedWords);
+});
+
+test("rejects allocated requested lengths outside their payload without mutation", () => {
+  for (const requestedLength of [0, 24]) {
+    const allocator = new BaseCallAllocatorUseArrayBuffer(128);
+    const allocation = allocator.block_write(new Uint8Array(8));
+    const words = new Int32Array(allocator.share_arrays_memory);
+    words[(allocation[0] - 16) / 4 + 3] = requestedLength;
+    const expectedWords = Array.from(words);
+
+    assert.throws(() => allocator.get_memory(...allocation), /corrupt/i);
+    assert.deepStrictEqual(Array.from(words), expectedWords);
+    assert.throws(() => allocator.free(...allocation), /corrupt/i);
+    assert.deepStrictEqual(Array.from(words), expectedWords);
+  }
+});
+
 test("asynchronously writes payloads with the same ownership contract", async () => {
   const allocator = new BaseCallAllocatorUseArrayBuffer(64);
   const allocation = await allocator.async_write(new Uint8Array([9, 8, 7]));
