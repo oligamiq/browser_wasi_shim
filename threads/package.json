@@ -1,11 +1,12 @@
 {
   "name": "@oligami/browser_wasi_shim-threads",
-  "version": "0.3.7",
+  "version": "0.4.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "npm run worker && vite build && node ./scripts/post_build.js",
     "prepare": "npm run build",
+    "test": "bun test src",
     "fmt": "biome format --write .",
     "lint": "biome lint src examples import-module-test",
     "check": "biome check && tsc --noEmit",
