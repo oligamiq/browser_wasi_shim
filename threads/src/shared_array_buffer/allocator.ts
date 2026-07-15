@@ -55,32 +55,36 @@ export class AllocatorUseArrayBuffer {
   // Since postMessage makes the class an object,
   // it must be able to receive and assign a SharedArrayBuffer.
   /**
-   * Initializes a new AllocatorUseArrayBuffer.
+   * Creates an allocator and initializes its shared-memory headers.
    *
    * @param share_arrays_memory The shared memory buffer to manage. Defaults to a 10MB buffer.
+   * @param initialize Whether to initialize the buffer headers. Attachments pass false to preserve shared state.
    */
   constructor(
     share_arrays_memory: SharedArrayBuffer = new SharedArrayBuffer(
       10 * 1024 * 1024,
     ),
+    initialize = true,
   ) {
     this.share_arrays_memory = share_arrays_memory;
-    const view = new Int32Array(this.share_arrays_memory);
-    Atomics.store(view, 0, 0);
-    Atomics.store(view, 1, 0);
-    Atomics.store(view, 2, 12);
+    if (initialize) {
+      const view = new Int32Array(this.share_arrays_memory);
+      Atomics.store(view, 0, 0);
+      Atomics.store(view, 1, 0);
+      Atomics.store(view, 2, 12);
+    }
   }
 
   // Since postMessage converts classes to objects,
   // it must be able to convert objects to classes.
   /**
-   * Reconstructs an allocator from a transferred object.
+   * Attaches an allocator to transferred shared state without resetting headers.
    *
    * @param sl The serialized allocator state.
    * @returns A new AllocatorUseArrayBuffer instance.
    */
   static init_self(sl: AllocatorUseArrayBufferObject): AllocatorUseArrayBuffer {
-    return new AllocatorUseArrayBuffer(sl.share_arrays_memory);
+    return new AllocatorUseArrayBuffer(sl.share_arrays_memory, false);
   }
 
   // Writes without blocking threads when acquiring locks
@@ -117,13 +121,12 @@ export class AllocatorUseArrayBuffer {
         continue;
       }
 
-      const ret = this.write_inner(data, memory, ret_ptr);
-
-      // release lock
-      Atomics.store(view, 0, 0);
-      Atomics.notify(view, 0, 1);
-
-      return ret;
+      try {
+        return this.write_inner(data, memory, ret_ptr);
+      } finally {
+        Atomics.store(view, 0, 0);
+        Atomics.notify(view, 0, 1);
+      }
     }
   }
 
@@ -146,13 +149,12 @@ export class AllocatorUseArrayBuffer {
         continue;
       }
 
-      const ret = this.write_inner(data, memory, ret_ptr);
-
-      // release lock
-      Atomics.store(view, 0, 0);
-      Atomics.notify(view, 0, 1);
-
-      return ret;
+      try {
+        return this.write_inner(data, memory, ret_ptr);
+      } finally {
+        Atomics.store(view, 0, 0);
+        Atomics.notify(view, 0, 1);
+      }
     }
   }
 
@@ -184,6 +186,7 @@ export class AllocatorUseArrayBuffer {
     const len = data.byteLength;
     const new_memory_len = share_arrays_memory_kept + len;
     if (memory_len < new_memory_len) {
+      Atomics.sub(view, 1, 1);
       // extend memory
       // support from es2024
       // this.share_arrays_memory.grow(new_memory_len);

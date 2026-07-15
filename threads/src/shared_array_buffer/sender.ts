@@ -45,11 +45,12 @@ export abstract class ToRefSenderUseArrayBuffer {
   private data_size: number;
 
   /**
-   * Initializes a new ToRefSenderUseArrayBuffer.
+   * Creates a sender and initializes its shared-memory headers.
    *
    * @param data_size The fixed size of each data entry in bytes.
    * @param max_share_arrays_memory The maximum size of the shared memory buffer. Defaults to 100KB.
    * @param share_arrays_memory Optional existing SharedArrayBuffer to use.
+   * @param initialize Whether to initialize the buffer headers. Attachments pass false to preserve queued data.
    */
   constructor(
     // data is Uint32Array
@@ -57,6 +58,7 @@ export abstract class ToRefSenderUseArrayBuffer {
     data_size: number,
     max_share_arrays_memory: number = 100 * 1024,
     share_arrays_memory?: SharedArrayBuffer,
+    initialize = true,
   ) {
     this.data_size = data_size;
     if (share_arrays_memory) {
@@ -64,10 +66,12 @@ export abstract class ToRefSenderUseArrayBuffer {
     } else {
       this.share_arrays_memory = new SharedArrayBuffer(max_share_arrays_memory);
     }
-    const view = new Int32Array(this.share_arrays_memory);
-    Atomics.store(view, 0, 0);
-    Atomics.store(view, 1, 0);
-    Atomics.store(view, 2, 12);
+    if (initialize) {
+      const view = new Int32Array(this.share_arrays_memory);
+      Atomics.store(view, 0, 0);
+      Atomics.store(view, 1, 0);
+      Atomics.store(view, 2, 12);
+    }
   }
 
   /**
@@ -145,36 +149,37 @@ export abstract class ToRefSenderUseArrayBuffer {
     data: Uint32Array,
   ): Promise<void> {
     await this.async_lock();
+    try {
+      const view = new Int32Array(this.share_arrays_memory);
+      const used_len = Atomics.load(view, 2);
+      const data_len = data.byteLength;
+      if (data_len !== this.data_size) {
+        throw new Error(`invalid data size: ${data_len} !== ${this.data_size}`);
+      }
+      const new_used_len = used_len + data_len + 8 + targets.length * 4;
+      if (new_used_len > this.share_arrays_memory.byteLength) {
+        throw new Error("over memory");
+      }
 
-    const view = new Int32Array(this.share_arrays_memory);
-    const used_len = Atomics.load(view, 2);
-    const data_len = data.byteLength;
-    if (data_len !== this.data_size) {
-      throw new Error(`invalid data size: ${data_len} !== ${this.data_size}`);
+      Atomics.store(view, 2, new_used_len);
+
+      const header = new Int32Array(this.share_arrays_memory, used_len);
+      header[0] = targets.length;
+      header[1] = targets.length;
+      header.set(targets, 2);
+
+      const data_view = new Uint32Array(
+        this.share_arrays_memory,
+        used_len + 8 + targets.length * 4,
+      );
+      data_view.set(data);
+
+      // console.log("async_send send", targets, data);
+
+      Atomics.add(view, 1, 1);
+    } finally {
+      this.release_lock();
     }
-    const new_used_len = used_len + data_len + 8 + targets.length * 4;
-    if (new_used_len > this.share_arrays_memory.byteLength) {
-      throw new Error("over memory");
-    }
-
-    Atomics.store(view, 2, new_used_len);
-
-    const header = new Int32Array(this.share_arrays_memory, used_len);
-    header[0] = targets.length;
-    header[1] = targets.length;
-    header.set(targets, 2);
-
-    const data_view = new Uint32Array(
-      this.share_arrays_memory,
-      used_len + 8 + targets.length * 4,
-    );
-    data_view.set(data);
-
-    // console.log("async_send send", targets, data);
-
-    Atomics.add(view, 1, 1);
-
-    this.release_lock();
   }
 
   /**
@@ -191,69 +196,84 @@ export abstract class ToRefSenderUseArrayBuffer {
     }
 
     this.block_lock();
+    try {
+      const data_num = Atomics.load(view, 1);
 
-    const data_num = Atomics.load(view, 1);
+      const return_data: Array<Uint32Array> = [];
 
-    const return_data: Array<Uint32Array> = [];
-
-    let offset = 12;
-    // console.log("data_num", data_num);
-    for (let i = 0; i < data_num; i++) {
-      // console.log("this.share_arrays_memory", this.share_arrays_memory);
-      const header = new Int32Array(this.share_arrays_memory, offset);
-      const target_num = header[1];
-      const targets = new Int32Array(
-        this.share_arrays_memory,
-        offset + 8,
-        target_num,
-      );
-      const data_len = this.data_size;
-      if (targets.includes(id)) {
-        const data = new Uint32Array(
+      let offset = 12;
+      // console.log("data_num", data_num);
+      for (let i = 0; i < data_num; i++) {
+        // console.log("this.share_arrays_memory", this.share_arrays_memory);
+        const header = new Int32Array(this.share_arrays_memory, offset);
+        const target_num = header[1];
+        const targets = new Int32Array(
           this.share_arrays_memory,
-          offset + 8 + target_num * 4,
-          data_len / 4,
+          offset + 8,
+          target_num,
         );
-
-        // なぜかわからないが、上では正常に動作せず、以下のようにすると動作する
-        // Translation: For some reason, the above does not work correctly, but the following works.
-        // return_data.push(new Uint32Array(data));
-        return_data.push(new Uint32Array([...data]));
-
-        const target_index = targets.indexOf(id);
-        Atomics.store(targets, target_index, -1);
-        const old_left_targets_num = Atomics.sub(header, 0, 1);
-        if (old_left_targets_num === 1) {
-          // rm data
-          Atomics.sub(view, 1, 1);
-          const used_len = Atomics.load(view, 2);
-          const new_used_len = used_len - data_len - 8 - target_num * 4;
-          Atomics.store(view, 2, new_used_len);
-          const next_data_offset = offset + data_len + 8 + target_num * 4;
-          const next_tail = new Int32Array(
+        const data_len = this.data_size;
+        if (targets.includes(id)) {
+          const data = new Uint32Array(
             this.share_arrays_memory,
-            next_data_offset,
+            offset + 8 + target_num * 4,
+            data_len / 4,
           );
-          const now_tail = new Int32Array(this.share_arrays_memory, offset);
-          now_tail.set(next_tail);
-          // console.log("new_used_len", new_used_len);
+
+          // なぜかわからないが、上では正常に動作せず、以下のようにすると動作する
+          // Translation: For some reason, the above does not work correctly, but the following works.
+          // return_data.push(new Uint32Array(data));
+          return_data.push(new Uint32Array([...data]));
+
+          const target_index = targets.indexOf(id);
+          Atomics.store(targets, target_index, -1);
+          const old_left_targets_num = Atomics.sub(header, 0, 1);
+          if (old_left_targets_num === 1) {
+            // rm data
+            Atomics.sub(view, 1, 1);
+            const used_len = Atomics.load(view, 2);
+            const new_used_len = used_len - data_len - 8 - target_num * 4;
+            Atomics.store(view, 2, new_used_len);
+            const next_data_offset = offset + data_len + 8 + target_num * 4;
+            const next_tail = new Int32Array(
+              this.share_arrays_memory,
+              next_data_offset,
+            );
+            const now_tail = new Int32Array(this.share_arrays_memory, offset);
+            now_tail.set(next_tail);
+            // console.log("new_used_len", new_used_len);
+          } else {
+            offset += data_len + 8 + target_num * 4;
+          }
         } else {
           offset += data_len + 8 + target_num * 4;
         }
-      } else {
-        offset += data_len + 8 + target_num * 4;
+        // console.log("offset", offset);
       }
-      // console.log("offset", offset);
+
+      if (offset !== Atomics.load(view, 2)) {
+        throw new Error(
+          `invalid offset: ${offset} !== ${Atomics.load(view, 2)}`,
+        );
+      }
+
+      // console.log("get_data get: return_data", return_data);
+
+      return return_data;
+    } finally {
+      this.release_lock();
     }
+  }
 
-    if (offset !== Atomics.load(view, 2)) {
-      throw new Error(`invalid offset: ${offset} !== ${Atomics.load(view, 2)}`);
-    }
-
-    this.release_lock();
-
-    // console.log("get_data get: return_data", return_data);
-
-    return return_data;
+  /**
+   * Returns cloneable state for attaching another sender to this shared queue.
+   *
+   * @returns The sender data size and shared-memory buffer.
+   */
+  get_object(): ToRefSenderUseArrayBufferObject {
+    return {
+      data_size: this.data_size,
+      share_arrays_memory: this.share_arrays_memory,
+    };
   }
 }

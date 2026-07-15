@@ -27,16 +27,18 @@ export class FdCloseSenderUseArrayBuffer
 {
   // Should be able to change the size of memory as it accumulates more and more on memory
   /**
-   * Initializes a new FdCloseSenderUseArrayBuffer.
+   * Creates a sender and initializes its shared-memory headers.
    *
    * @param max_share_arrays_memory Optional maximum size for the shared memory buffer.
    * @param share_arrays_memory Optional existing SharedArrayBuffer to use.
+   * @param initialize Whether to initialize the buffer headers. Attachments pass false.
    */
   constructor(
     max_share_arrays_memory?: number,
     share_arrays_memory?: SharedArrayBuffer,
+    initialize = true,
   ) {
-    super(4, max_share_arrays_memory, share_arrays_memory);
+    super(4, max_share_arrays_memory, share_arrays_memory, initialize);
   }
 
   // Send the closed file descriptor to the target process
@@ -66,18 +68,30 @@ export class FdCloseSenderUseArrayBuffer
     return array;
   }
 
+  /**
+   * Returns cloneable state for attaching another fd-close sender.
+   *
+   * @returns The sender data size and shared-memory buffer.
+   */
+  override get_object(): FdCloseSenderUseArrayBufferObject {
+    return super.get_object();
+  }
+
   // Initialize the class from object
   /**
-   * Reconstructs a sender from a transferred object.
+   * Attaches a sender to transferred shared state without resetting queued data.
    *
    * @param sl The serialized sender state.
-   * @returns A new FdCloseSender instance.
+   * @returns A new FdCloseSenderUseArrayBuffer instance.
    */
-  static init_self(sl: FdCloseSenderUseArrayBufferObject): FdCloseSender {
+  static init_self(
+    sl: FdCloseSenderUseArrayBufferObject,
+  ): FdCloseSenderUseArrayBuffer {
     const sel = ToRefSenderUseArrayBuffer.init_self_inner(sl);
     return new FdCloseSenderUseArrayBuffer(
       sel.max_share_arrays_memory,
       sel.share_arrays_memory,
+      false,
     );
   }
 }
