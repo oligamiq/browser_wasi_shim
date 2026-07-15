@@ -1,14 +1,14 @@
 import { type Fd, wasi } from "@bjorn3/browser_wasi_shim";
 import { WASIFarmPark } from "../park.ts";
-import type { FdCloseSender } from "../sender.ts";
 import { AllocatorUseArrayBuffer } from "./allocator.ts";
 import { FdCloseSenderUseArrayBuffer } from "./fd_close_sender.ts";
 import type { WASIFarmRefUseArrayBufferObject } from "./ref.ts";
 import { wrap_async } from "./util.ts";
 import {
-  encodeStrictJsonValue,
   decodeStrictJsonValue,
+  encodeStrictJsonValue,
 } from "../codec/index.ts";
+import { BaseCallOpcode, BaseCallParkUseArrayBuffer } from "./base_call.ts";
 
 export const fd_func_sig_u32_size: number = 18;
 export const fd_func_sig_bytes: number = fd_func_sig_u32_size * 4;
@@ -97,17 +97,11 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
   // In other words, one size is 76 bytes
   private fd_func_sig: SharedArrayBuffer;
 
-  // listen base handle keep
-  // @ts-expect-error
-  private listen_base_handle: Promise<void> | undefined | null;
-
-  private listen_base_terminator: (() => void) | undefined | null;
-
-  /** listen base lock and call etc */
-  private base_func_util: SharedArrayBuffer;
+  private readonly baseCall: BaseCallParkUseArrayBuffer;
+  private destroyed = false;
 
   /** tell other processes that the file descriptor has been closed */
-  private fd_close_receiver: FdCloseSender;
+  private fd_close_receiver: FdCloseSenderUseArrayBuffer;
 
   /** this is not send by postMessage,
    * so it is not necessary to keep shared_array_buffer
@@ -124,6 +118,9 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
    * @param default_allow_fds The list of FDs initially allowed for access.
    * @param allocator_size Optional size for the shared memory allocator.
    * @param max_fds_len Optional limit on the number of file descriptors.
+   * @param unknown_fn Optional host callback invoked by user base calls.
+   * @param max_base_calls_limit Maximum concurrent user calls; one additional
+   * reserved slot remains available for fd mapping and destruction.
    */
   constructor(
     fds: Array<Fd>,
@@ -138,8 +135,17 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     allocator_size?: number,
     max_fds_len?: number,
     unknown_fn?: ((arg: unknown) => Promise<unknown> | unknown) | null,
+    max_base_calls_limit?: number,
   ) {
     super(fds, stdin, stdout, stderr, default_allow_fds, unknown_fn);
+
+    this.baseCall = new BaseCallParkUseArrayBuffer(
+      this.handleBaseCall.bind(this),
+      {
+        maxBaseCalls: max_base_calls_limit,
+        onBeginDestroy: () => this.stopFdListeners(),
+      },
+    );
 
     if (allocator_size === undefined) {
       this.allocator = new AllocatorUseArrayBuffer();
@@ -161,37 +167,42 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     Atomics.store(view, 1, 0);
 
     this.fd_close_receiver = new FdCloseSenderUseArrayBuffer();
-    this.base_func_util = new SharedArrayBuffer(32);
   }
 
-  /** Destroy this instance. */
-  destroy() {
-    // stop listen fds
-    for (let n = 0; n < this.fds.length; n++) {
+  /**
+   * Destroys this Park's base transport and fd listeners.
+   *
+   * The operation is synchronous and idempotent. It wakes blocked base-call
+   * clients without waiting for callback Promises and does not destroy Animals
+   * or external Workers that hold a reference.
+   */
+  destroy(): void {
+    this.baseCall.destroy();
+  }
+
+  private stopFdListeners(): void {
+    this.destroyed = true;
+    for (let n = 0; n < this.listen_fds_terminator.length; n++) {
       const terminator = this.listen_fds_terminator[n];
       if (terminator) {
         terminator();
         this.listen_fds_terminator[n] = null;
-        this.listen_fds[n] = null;
       }
-    }
-    // stop listen base
-    if (this.listen_base_terminator) {
-      this.listen_base_terminator();
-      this.listen_base_terminator = null;
-      this.listen_base_handle = null;
     }
   }
 
-  /// Send this return by postMessage.
+  /**
+   * Returns cloneable transport data for reconstructing a Worker-side ref.
+   * Cloning transfers no allocator, fd, or base-call payload ownership.
+   */
   get_ref(): WASIFarmRefUseArrayBufferObject {
     return {
-      allocator: this.allocator,
+      allocator: this.allocator.get_object(),
       lock_fds: this.lock_fds,
       fds_len_and_num: this.fds_len_and_num,
       fd_func_sig: this.fd_func_sig,
-      base_func_util: this.base_func_util,
-      fd_close_receiver: this.fd_close_receiver,
+      baseCall: this.baseCall.get_object(),
+      fd_close_receiver: this.fd_close_receiver.get_object(),
       stdin: this.stdin,
       stdout: this.stdout,
       stderr: this.stderr,
@@ -204,6 +215,9 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
   // received and listen the fd
   // and set fds.length
   async notify_set_fd(fd: number) {
+    if (this.destroyed) {
+      return;
+    }
     if (this.fds[fd] === undefined) {
       throw new Error("fd is not defined");
     }
@@ -212,12 +226,14 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     }
     if (this.listen_fds[fd] !== undefined) {
       if (this.listen_fds[fd] instanceof Promise) {
-        console.warn("fd is already set yet");
         await this.listen_fds[fd];
       }
     }
+    if (this.destroyed) {
+      return;
+    }
     const { promise, terminate } = this.listen_fd(fd);
-    this.listen_fds[fd] = promise;
+    this.listen_fds[fd] = promise.catch(() => undefined);
     this.listen_fds_terminator[fd] = terminate;
 
     const view = new Int32Array(this.fds_len_and_num);
@@ -261,118 +277,52 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
   // listen all fds and base
   // Must be called before was_ref_id is instantiated
   listen() {
+    if (this.destroyed) {
+      return;
+    }
     this.listen_fds = [];
     for (let n = 0; n < this.fds.length; n++) {
       const { promise, terminate } = this.listen_fd(n);
-      this.listen_fds.push(promise);
+      this.listen_fds.push(promise.catch(() => undefined));
       this.listen_fds_terminator.push(terminate);
     }
-    const { promise, terminate } = this.listen_base();
-    this.listen_base_handle = promise;
-    this.listen_base_terminator = terminate;
+    this.baseCall.listen();
   }
 
-  // listen base
-  // ex) set_fds_map
-  // if close fd and send to other process,
-  // it need targets wasi_farm_ref id
-  // so, set fds_map
-  listen_base(): { promise: Promise<void>; terminate: () => void } {
-    return wrap_async(this.listen_base_inner.bind(this));
-  }
-
-  async listen_base_inner() {
-    const lock_view = new Int32Array(this.base_func_util);
-    Atomics.store(lock_view, 0, 0);
-    Atomics.store(lock_view, 1, 1);
-
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      const { value } = Atomics.waitAsync(lock_view, 1, 1);
-      if ((await value) === "timed-out") {
-        throw new Error("timed-out");
+  private async handleBaseCall(
+    opcode: BaseCallOpcode,
+    payload: Uint8Array,
+  ): Promise<Uint8Array | undefined> {
+    if (opcode === BaseCallOpcode.SetParkFdsMap) {
+      if (
+        payload.byteLength < Uint32Array.BYTES_PER_ELEMENT ||
+        payload.byteLength % Uint32Array.BYTES_PER_ELEMENT !== 0
+      ) {
+        throw new TypeError("fd-map payload must contain an id and whole fds");
       }
-
-      const func_number = Atomics.load(lock_view, 3);
-
-      switch (func_number) {
-        // set_fds_map: (fds_ptr: u32, fds_len: u32);
-        case 0: {
-          // console.log("set_fds_map");
-          const ptr = Atomics.load(lock_view, 4);
-          const len = Atomics.load(lock_view, 5);
-          // console.log("set_fds_map", ptr, len);
-          const data = new Uint32Array(this.allocator.get_memory(ptr, len));
-          this.allocator.free(ptr, len);
-          const wasi_farm_ref_id = Atomics.load(lock_view, 6);
-
-          // console.log("listen_base set_fds_map", data, "from", wasi_farm_ref_id);
-
-          // console.log("listen_base fds_map", this.fds_map);
-
-          for (let i = 0; i < len / 4; i++) {
-            const fd = data[i];
-            if (this.fds_map[fd] === undefined) {
-              this.fds_map[fd] = [];
-              console.error("listen_base fd is not defined");
-            }
-            this.fds_map[fd].push(wasi_farm_ref_id);
-            // console.log("this.fds_map", this.fds_map);
-            // console.log("this.fds_map[fd]", this.fds_map[fd]);
-            // console.log("this.fds_map[1]", this.fds_map[1]);
-            // console.log("fd", fd, "wasi_farm_ref_id", wasi_farm_ref_id);
-          }
-
-          // console.log("listen_base fds_map", this.fds_map);
-
-          // sleep 1000ms
-          await new Promise((resolve) => setTimeout(resolve, 1000));
-
-          break;
-        }
-        case 1: {
-          // destroy park
-          this.destroy();
-          // notify completion before returning
-          Atomics.store(lock_view, 1, 1);
-          Atomics.store(lock_view, 2, 0);
-          Atomics.notify(lock_view, 2, 1);
-          return;
-        }
-        case 2: {
-          const arg_ptr = Atomics.load(lock_view, 4);
-          const arg_len = Atomics.load(lock_view, 5);
-          const arg_data = this.allocator.get_memory(arg_ptr, arg_len);
-          const arg = decodeStrictJsonValue(new Uint8Array(arg_data));
-          this.allocator.free(arg_ptr, arg_len);
-
-          let ret: unknown;
-          if (this.unknown_fn) {
-            ret = await this.unknown_fn(arg);
-          }
-
-          if (ret !== undefined) {
-            const ret_bytes = encodeStrictJsonValue(ret);
-            await this.allocator.async_write(ret_bytes, this.base_func_util, 4);
-          } else {
-            Atomics.store(lock_view, 4, 0);
-            Atomics.store(lock_view, 5, 0);
-          }
-          break;
+      const words = new Uint32Array(
+        payload.buffer,
+        payload.byteOffset,
+        payload.byteLength / Uint32Array.BYTES_PER_ELEMENT,
+      );
+      const id = words[0];
+      for (let i = 1; i < words.length; i++) {
+        const fd = words[i];
+        const ids = (this.fds_map[fd] ??= []);
+        if (!ids.includes(id)) {
+          ids.push(id);
         }
       }
-
-      Atomics.store(lock_view, 1, 1);
-      Atomics.store(lock_view, 2, 0);
-      const num = Atomics.notify(lock_view, 2, 1);
-      if (num !== 1) {
-        if (num === 0) {
-          console.warn("notify failed, waiter is late");
-          continue;
-        }
-        throw new Error(`notify failed: ${num}`);
-      }
+      return undefined;
     }
+
+    if (opcode !== BaseCallOpcode.CallUnknownFn) {
+      throw new TypeError(`unsupported base-call opcode: ${opcode}`);
+    }
+
+    const arg = decodeStrictJsonValue(payload);
+    const ret = this.unknown_fn ? await this.unknown_fn(arg) : undefined;
+    return ret === undefined ? undefined : encodeStrictJsonValue(ret);
   }
 
   listen_fd(fd_n: number): {

@@ -73,9 +73,12 @@ export class DestroyerHandle {
   }
 
   /**
-   * Signals the destruction of the environment.
+   * Synchronously signals destruction through this handle's worker coordinator.
    *
-   * This method updates the shared status and notifies all listeners.
+   * It updates shared status and notifies listeners after requesting owned
+   * worker cleanup. It does not destroy a WASIFarm, Park, or Animal directly.
+   * The existing handle lifecycle requires callers not to reuse a handle after
+   * its asynchronous listener has released the transferred resources.
    */
   destroy(): void {
     const view = new Int32Array(this.destroy_status);

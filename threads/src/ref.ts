@@ -2,13 +2,17 @@ import type { wasi } from "@bjorn3/browser_wasi_shim";
 import type { FdCloseSender } from "./sender.js";
 
 /**
- * Represents the serialized state of a WASIFarmRef for thread transfer.
+ * Cloneable data required to reconstruct a `WASIFarmRef` in another agent.
+ *
+ * The object owns no payloads and may be structured-cloned repeatedly. The
+ * generic receiver member lets concrete transports expose cloneable data
+ * instead of a runtime class instance.
  */
-export type WASIFarmRefObject = {
+export type WASIFarmRefObject<FdCloseReceiverObject = unknown> = {
   stdin: number | undefined;
   stdout: number | undefined;
   stderr: number | undefined;
-  fd_close_receiver: FdCloseSender;
+  fd_close_receiver: FdCloseReceiverObject;
   default_fds: Array<number>;
 };
 
@@ -41,6 +45,13 @@ export abstract class WASIFarmRef {
     return this.fd_close_receiver.get(id);
   }
 
+  /**
+   * Synchronously registers this reference ID for the supplied Park fds.
+   *
+   * Duplicate registrations are ignored. The call blocks the current Worker
+   * until the Park commits the mapping and may throw on destruction or transport
+   * failure. It does not destroy this reference, its Animal, or its Park.
+   */
   abstract set_park_fds_map(fds: Array<number>): void;
 
   abstract set_id(): number;
@@ -202,7 +213,20 @@ export abstract class WASIFarmRef {
   ): number;
   abstract path_unlink_file(fd: number | undefined, path: Uint8Array): number;
 
+  /**
+   * Synchronously requests destruction of this reference's Park.
+   *
+   * The operation is idempotent and blocks the current Worker through the
+   * acknowledgement. It does not destroy the calling reference or its Animal.
+   */
   abstract destroy_park(): void;
 
+  /**
+   * Synchronously invokes the Park's configured unknown-function callback.
+   *
+   * The call blocks the current Worker and returns the strictly decoded result.
+   * Capacity, callback, codec, cancellation, and destruction failures throw. It
+   * does not destroy the reference, its Animal, or its Park.
+   */
   abstract call_unknown_fn(arg: unknown): unknown;
 }

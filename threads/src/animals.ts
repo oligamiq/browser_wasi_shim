@@ -401,8 +401,13 @@ export class WASIFarmAnimal {
     return this.thread_spawner?.create_destroyer();
   }
 
-  /// Destroys the all threads spawned by this Runtime.
-  destroy() {
+  /**
+   * Synchronously destroys this Animal and all thread resources it owns.
+   *
+   * The method does not destroy any referenced Park. Repeated calls are safe
+   * after the first call has cleared the Animal's owned state.
+   */
+  destroy(): void {
     if (this.thread_spawner) {
       this.thread_spawner.destroy();
     }
@@ -414,8 +419,13 @@ export class WASIFarmAnimal {
     this.thread_spawner = undefined;
   }
 
-  /// Destroy the n-th WASIFarmPark
-  destroy_park(n: number) {
+  /**
+   * Synchronously destroys the nth Park referenced by this Animal.
+   *
+   * The wire operation is idempotent. This method does not destroy the Animal,
+   * its threads, or any other referenced Park, and rejects an invalid index.
+   */
+  destroy_park(n: number): void {
     if (n < 0 || n >= this.wasi_farm_refs.length) {
       throw new Error(`wasi_farm_refs index ${n} is out of bounds.`);
     }
@@ -425,15 +435,25 @@ export class WASIFarmAnimal {
     }
   }
 
-  /// Destroy all WASIFarmParks
-  destroy_park_all() {
+  /**
+   * Synchronously destroys every Park referenced by this Animal.
+   *
+   * Each wire operation is idempotent. The Animal and its owned threads remain
+   * intact, so callers may still destroy them separately.
+   */
+  destroy_park_all(): void {
     for (let i = 0; i < this.wasi_farm_refs.length; i++) {
       this.destroy_park(i);
     }
   }
 
-  /// Destroy all WASIFarmParks and all threads
-  destroy_with_park() {
+  /**
+   * Synchronously destroys every referenced Park and then this Animal.
+   *
+   * Park destruction is idempotent, and the final Animal cleanup is safe to
+   * repeat. No unrelated Farm, Park, or external Worker is destroyed.
+   */
+  destroy_with_park(): void {
     this.destroy_park_all();
     this.destroy();
   }

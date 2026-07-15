@@ -11,20 +11,29 @@ import {
 } from "./fd_close_sender.ts";
 import { fd_func_sig_bytes, fd_func_sig_u32_size } from "./park.ts";
 import {
-  encodeStrictJsonValue,
   decodeStrictJsonValue,
+  encodeStrictJsonValue,
 } from "../codec/index.ts";
+import {
+  BaseCallOpcode,
+  BaseCallRefUseArrayBuffer,
+  type BaseCallTransportObject,
+} from "./base_call.ts";
 
 /**
- * Represents the serialized state of a WASIFarmRefUseArrayBuffer for thread transfer.
+ * Cloneable SharedArrayBuffer state for reconstructing a farm reference.
+ *
+ * Cloning acquires no allocator or base-call payload ownership. Every attached
+ * Worker reconstructs its own runtime wrappers around the shared data.
  */
-export type WASIFarmRefUseArrayBufferObject = {
-  allocator: AllocatorUseArrayBuffer;
-  lock_fds: SharedArrayBuffer;
-  fds_len_and_num: SharedArrayBuffer;
-  fd_func_sig: SharedArrayBuffer;
-  base_func_util: SharedArrayBuffer;
-} & WASIFarmRefObject;
+export type WASIFarmRefUseArrayBufferObject =
+  WASIFarmRefObject<FdCloseSenderUseArrayBufferObject> & {
+    allocator: AllocatorUseArrayBufferObject;
+    baseCall: BaseCallTransportObject;
+    lock_fds: SharedArrayBuffer;
+    fds_len_and_num: SharedArrayBuffer;
+    fd_func_sig: SharedArrayBuffer;
+  };
 
 /**
  * WASIFarmRefUseArrayBuffer implements the `WASIFarmRef` interface using `SharedArrayBuffer`
@@ -39,7 +48,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
   // byte 2: all wasi_farm_ref num
   fds_len_and_num: SharedArrayBuffer;
   fd_func_sig: SharedArrayBuffer;
-  base_func_util: SharedArrayBuffer;
+  private readonly baseCall: BaseCallRefUseArrayBuffer;
 
   /**
    * Initializes a new WASIFarmRefUseArrayBuffer.
@@ -48,7 +57,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
    * @param lock_fds The shared buffer for FD locks.
    * @param fds_len_and_num The shared buffer for global FD state.
    * @param fd_func_sig The shared buffer for function signatures.
-   * @param base_func_util The shared buffer for base utility signaling.
+   * @param baseCall Cloneable version-2 base-call transport state.
    * @param fd_close_receiver The serialized state of the FD close notification receiver.
    * @param stdin The index of the standard input FD.
    * @param stdout The index of the standard output FD.
@@ -60,7 +69,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     lock_fds: SharedArrayBuffer,
     fds_len_and_num: SharedArrayBuffer,
     fd_func_sig: SharedArrayBuffer,
-    base_func_util: SharedArrayBuffer,
+    baseCall: BaseCallTransportObject,
     fd_close_receiver: FdCloseSenderUseArrayBufferObject,
     stdin: number | undefined,
     stdout: number | undefined,
@@ -77,7 +86,7 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     this.allocator = AllocatorUseArrayBuffer.init_self(allocator);
     this.lock_fds = lock_fds;
     this.fd_func_sig = fd_func_sig;
-    this.base_func_util = base_func_util;
+    this.baseCall = BaseCallRefUseArrayBuffer.init_self(baseCall);
     this.fds_len_and_num = fds_len_and_num;
 
     // console.log("fds_len_and_num", this.fds_len_and_num);
@@ -103,8 +112,8 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
       sl.lock_fds,
       sl.fds_len_and_num,
       sl.fd_func_sig,
-      sl.base_func_util,
-      sl.fd_close_receiver as unknown as FdCloseSenderUseArrayBufferObject,
+      sl.baseCall,
+      sl.fd_close_receiver,
       sl.stdin,
       sl.stdout,
       sl.stderr,
@@ -120,102 +129,32 @@ export class WASIFarmRefUseArrayBuffer extends WASIFarmRef {
     return id;
   }
 
-  private base_func_locker(): Int32Array<SharedArrayBuffer> {
-    return new Int32Array(this.base_func_util);
-  }
-
-  private base_func_park_locker(): Int32Array<SharedArrayBuffer> {
-    return new Int32Array(this.base_func_util, 12);
-  }
-
-  // lock base_func
-  private lock_base_func(): void {
-    const view = this.base_func_locker();
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      const lock = Atomics.wait(view, 0, 1);
-      if (lock === "timed-out") {
-        throw new Error("timed-out lock");
-      }
-      const old = Atomics.compareExchange(view, 0, 0, 1);
-      if (old === 0) {
-        break;
-      }
-    }
-  }
-
-  // call base_func
-  private call_base_func(): void {
-    const view = this.base_func_locker();
-    Atomics.store(view, 2, 1);
-    Atomics.store(view, 1, 0);
-    Atomics.notify(view, 1, 1);
-  }
-
-  // wait base_func
-  private wait_base_func(): void {
-    const view = this.base_func_locker();
-    const lock = Atomics.wait(view, 2, 1);
-    if (lock === "timed-out") {
-      throw new Error("timed-out lock");
-    }
-  }
-
-  // release base_func
-  private release_base_func(): void {
-    const view = this.base_func_locker();
-    Atomics.store(view, 0, 0);
-    Atomics.notify(view, 0, 1);
-  }
-
-  // set park_fds_map
+  /** Registers this reference's fd mappings through the reserved system slot. */
   set_park_fds_map(fds: Array<number>): void {
-    this.lock_base_func();
-    const view = this.base_func_park_locker();
-    Atomics.store(view, 0, 0);
-    const fds_array = new Uint32Array(fds);
-    // console.log("fds_array", fds_array);
-    this.allocator.block_write(fds_array, this.base_func_util, 1 + 3);
-    Atomics.store(view, 3, this.id);
-    this.call_base_func();
-    this.wait_base_func();
-    this.release_base_func();
+    const words = new Uint32Array([this.id, ...fds]);
+    const payload = new Uint8Array(
+      words.buffer,
+      words.byteOffset,
+      words.byteLength,
+    );
+    this.baseCall.block_call(BaseCallOpcode.SetParkFdsMap, payload);
   }
 
-  // destroy park on the main thread
+  /** Requests idempotent Park destruction through the reserved system slot. */
   destroy_park(): void {
-    this.lock_base_func();
-    const view = this.base_func_park_locker();
-    Atomics.store(view, 0, 1);
-    this.call_base_func();
-    this.wait_base_func();
-    this.release_base_func();
+    this.baseCall.block_call(BaseCallOpcode.DestroyPark, new Uint8Array());
   }
 
+  /** Invokes the host callback through a bounded user slot. */
   call_unknown_fn(arg: unknown): unknown {
-    this.lock_base_func();
-    const view = this.base_func_park_locker();
-    Atomics.store(view, 0, 2);
     const arg_bytes = encodeStrictJsonValue(arg);
-    this.allocator.block_write(arg_bytes, this.base_func_util, 3 + 1);
-
-    this.call_base_func();
-    this.wait_base_func();
-
-    const ret_ptr = Atomics.load(view, 1);
-    const ret_len = Atomics.load(view, 2);
-
-    let ret: unknown;
-    if (ret_len > 0) {
-      const ret_bytes = new Uint8Array(
-        this.allocator.get_memory(ret_ptr, ret_len),
-      );
-      this.allocator.free(ret_ptr, ret_len);
-      ret = decodeStrictJsonValue(ret_bytes);
-    }
-
-    this.release_base_func();
-    return ret;
+    const ret_bytes = this.baseCall.block_call(
+      BaseCallOpcode.CallUnknownFn,
+      arg_bytes,
+    );
+    return ret_bytes === undefined
+      ? undefined
+      : decodeStrictJsonValue(ret_bytes);
   }
 
   key: number = Math.round(Math.random() * 100);

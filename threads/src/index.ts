@@ -7,9 +7,19 @@
 import { WASIFarmAnimal } from "./animals.ts";
 import { WASIFarm } from "./farm.ts";
 import { WASIFarmRef } from "./ref.ts";
+import type { WASIFarmRefObject } from "./ref.ts";
 import { DestroyerHandle } from "./destroyer_handle.ts";
-export { thread_spawn_on_worker } from "./shared_array_buffer/index.ts";
-export { WASIFarm, WASIFarmRef, WASIFarmAnimal, DestroyerHandle };
+export {
+  BaseCallCapacityError,
+  thread_spawn_on_worker,
+} from "./shared_array_buffer/index.ts";
+export {
+  WASIFarm,
+  WASIFarmRef,
+  type WASIFarmRefObject,
+  WASIFarmAnimal,
+  DestroyerHandle,
+};
 
 // @ts-ignore
 import worker_background_worker from "./shared_array_buffer/worker_background/worker_background_worker_minify.js";

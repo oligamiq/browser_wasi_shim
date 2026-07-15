@@ -9,6 +9,13 @@ import type { WASIFarmRefObject } from "./ref.js";
 export abstract class WASIFarmPark {
   abstract get_ref(): WASIFarmRefObject;
   abstract listen(): void;
+  /**
+   * Destroys this Park's listeners and transport without destroying Animals.
+   *
+   * The operation is synchronous and idempotent. It wakes blocked base-call
+   * clients and does not wait for unresolved user callbacks.
+   */
+  abstract destroy(): void;
   abstract notify_set_fd(fd: number): void;
   abstract notify_rm_fd(fd: number): void;
   abstract can_set_new_fd(fd: number): [boolean, Promise<void> | undefined];

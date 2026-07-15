@@ -22,7 +22,10 @@ export class WASIFarm {
    * @param stdout The standard output file descriptor.
    * @param stderr The standard error file descriptor.
    * @param fds Additional file descriptors to include in the farm.
-   * @param options Configuration options for the farm backend.
+   * @param options Configuration for shared allocation, descriptor capacity,
+   * base-call capacity, and the host callback. `max_base_calls_limit` defaults
+   * to 128 and must be an integer from 1 through 1024. Construction starts the
+   * non-blocking Park listener; Animals and external Workers are not created.
    */
   constructor(
     stdin?: Fd,
@@ -32,6 +35,8 @@ export class WASIFarm {
     options: {
       allocator_size?: number;
       max_fds_limit?: number;
+      /** Maximum concurrent user base calls, excluding one reserved system slot. */
+      max_base_calls_limit?: number;
       unknown_fn?: ((arg: unknown) => Promise<unknown> | unknown) | null;
     } = {},
   ) {
@@ -91,6 +96,7 @@ export class WASIFarm {
         options?.allocator_size,
         options?.max_fds_limit,
         options?.unknown_fn,
+        options?.max_base_calls_limit,
       );
     } else {
       throw new Error("Non SharedArrayBuffer is not supported yet");
@@ -133,5 +139,17 @@ export class WASIFarm {
     }
 
     return this.park.get_ref();
+  }
+
+  /**
+   * Destroys this farm and its exclusively owned Park.
+   *
+   * The operation is synchronous and idempotent. It rejects new base calls,
+   * wakes blocked callers, and does not wait for unresolved user callbacks. It
+   * does not destroy Animals or terminate external Workers holding a reference.
+   */
+  destroy(): void {
+    this.park?.destroy();
+    this.park = null;
   }
 }
