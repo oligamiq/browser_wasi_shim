@@ -33,7 +33,7 @@ The option is measured in bytes and controls only the shared payload allocator u
 
 `WASIFarmParkUseArrayBuffer` receives the corresponding optional final constructor argument. Adding it at the end preserves existing positional call sites. It forwards the value as `allocatorBytes` to `BaseCallParkUseArrayBuffer`, which already owns allocator validation and construction.
 
-An omitted value continues to use `DEFAULT_BASE_CALL_ALLOCATOR_BYTES`. Invalid values continue to fail through the existing `BaseCallPayloadAllocator` validation rather than introducing a second validation policy.
+An omitted value continues to use the existing private 10 MiB constructor default. Invalid values continue to fail through `BaseCallAllocatorUseArrayBuffer` validation rather than introducing a second validation policy.
 
 ## WebShell Configuration
 
