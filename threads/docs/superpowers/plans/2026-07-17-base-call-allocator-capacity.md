@@ -439,7 +439,7 @@ restore_local_locks() {
   cp /tmp/opencode/rubrc-local-bindings-bun.lock page/src/worker_process/vfs_bindings/bun.lock
 }
 trap restore_local_locks EXIT INT TERM
-bun --cwd page add --no-save /tmp/opencode/oligami-browser_wasi_shim-threads-0.4.1.tgz
+bun add --cwd=page --no-save /tmp/opencode/oligami-browser_wasi_shim-threads-0.4.1.tgz
 bun run build
 restore_local_locks
 trap - EXIT INT TERM
@@ -567,7 +567,7 @@ Run:
 ```bash
 bun install
 npm install --prefix lib --package-lock-only
-bun install --cwd page/src/worker_process/vfs_bindings
+bun install --cwd=page/src/worker_process/vfs_bindings
 ```
 
 The root and page npm locks have known broad historical staleness, so do not run broad npm regeneration in those contexts. Run this deterministic focused updater after the commands above. It reads the verified registry metadata, updates every package-context edge for Threads in the three text npm locks, and updates only the Threads package node:
