@@ -61,13 +61,14 @@ function slotWord(slotIndex: number, word: number): number {
 function createTestFarm(
   unknown_fn?: (arg: unknown) => Promise<unknown> | unknown,
   max_base_calls_limit = 4,
+  base_call_allocator_size?: number,
 ): WASIFarm {
   return new WASIFarm(
     new OpenFile(new File([])),
     new OpenFile(new File([])),
     new OpenFile(new File([])),
     [new PreopenDirectory("/", new Map())],
-    { unknown_fn, max_base_calls_limit },
+    { unknown_fn, max_base_calls_limit, base_call_allocator_size },
   );
 }
 
@@ -109,6 +110,52 @@ function destroyFarm(farm: WASIFarm): void {
     }
   ).park?.destroy();
 }
+
+test("custom allocator carries a payload larger than the default through an actual Worker", async () => {
+  const payloadLength = 11 * 1024 * 1024;
+  const payload = "x".repeat(payloadLength);
+
+  const callback = (arg: unknown) => {
+    assert.deepStrictEqual(arg, { kind: "large-response" });
+    return { payload };
+  };
+  const defaultFarm = createTestFarm(callback);
+  const expandedFarm = createTestFarm(callback, 4, 12 * 1024 * 1024);
+  const defaultWorker = new Worker(
+    new URL("./test_workers/base_call_outer_worker.ts", import.meta.url).href,
+  );
+  const expandedWorker = new Worker(
+    new URL("./test_workers/base_call_outer_worker.ts", import.meta.url).href,
+  );
+
+  try {
+    const rejected = await runWorker(
+      defaultWorker,
+      { wasiRef: defaultFarm.get_ref(), arg: { kind: "large-response" } },
+      60_000,
+    );
+    assert.strictEqual(rejected.ok, false);
+    if (!rejected.ok) assert.match(rejected.error, /OutOfMemory/i);
+
+    const accepted = await runWorker(
+      expandedWorker,
+      { wasiRef: expandedFarm.get_ref(), arg: { kind: "large-response" } },
+      60_000,
+    );
+    assert.strictEqual(accepted.ok, true);
+    if (accepted.ok) {
+      const value = accepted.value as { payload: string };
+      assert.strictEqual(value.payload.length, payloadLength);
+      assert.strictEqual(value.payload[0], "x");
+      assert.strictEqual(value.payload.at(-1), "x");
+    }
+  } finally {
+    defaultWorker.terminate();
+    expandedWorker.terminate();
+    destroyFarm(defaultFarm);
+    destroyFarm(expandedFarm);
+  }
+});
 
 test("callback throws cross the actual Worker boundary", async () => {
   const farm = createTestFarm(() => {

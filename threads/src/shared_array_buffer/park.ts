@@ -121,6 +121,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
    * @param unknown_fn Optional host callback invoked by user base calls.
    * @param max_base_calls_limit Maximum concurrent user calls; one additional
    * reserved slot remains available for fd mapping and destruction.
+   * @param base_call_allocator_size Optional byte size of the multiplexed base-call payload allocator.
    */
   constructor(
     fds: Array<Fd>,
@@ -136,6 +137,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
     max_fds_len?: number,
     unknown_fn?: ((arg: unknown) => Promise<unknown> | unknown) | null,
     max_base_calls_limit?: number,
+    base_call_allocator_size?: number,
   ) {
     super(fds, stdin, stdout, stderr, default_allow_fds, unknown_fn);
 
@@ -143,6 +145,7 @@ export class WASIFarmParkUseArrayBuffer extends WASIFarmPark {
       this.handleBaseCall.bind(this),
       {
         maxBaseCalls: max_base_calls_limit,
+        allocatorBytes: base_call_allocator_size,
         onBeginDestroy: () => this.stopFdListeners(),
       },
     );

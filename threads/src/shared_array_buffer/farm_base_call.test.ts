@@ -14,13 +14,14 @@ import {
 function createTestFarm(
   unknown_fn?: (arg: unknown) => Promise<unknown> | unknown,
   max_base_calls_limit = 4,
+  base_call_allocator_size?: number,
 ): WASIFarm {
   return new WASIFarm(
     new OpenFile(new File([])),
     new OpenFile(new File([])),
     new OpenFile(new File([])),
     [new PreopenDirectory("/", new Map())],
-    { unknown_fn, max_base_calls_limit },
+    { unknown_fn, max_base_calls_limit, base_call_allocator_size },
   );
 }
 
@@ -52,6 +53,55 @@ test("validates and propagates max_base_calls_limit", () => {
     assert.strictEqual(concrete.baseCall.userSlotCount, 3);
   } finally {
     destroyFarm(farm);
+  }
+});
+
+test("validates and propagates base_call_allocator_size", () => {
+  for (const allocatorSize of [
+    -Infinity,
+    -1,
+    0,
+    63,
+    65,
+    1.5,
+    Number.NaN,
+    Infinity,
+  ]) {
+    assert.throws(
+      () => createTestFarm(undefined, 4, allocatorSize),
+      RangeError,
+    );
+  }
+
+  const defaultFarm = createTestFarm();
+  const minimumFarm = createTestFarm(undefined, 4, 64);
+  const configuredFarm = createTestFarm(undefined, 4, 64 * 1024 * 1024);
+  try {
+    const defaultTransport = defaultFarm.get_ref() as unknown as {
+      baseCall: BaseCallTransportObject;
+    };
+    const configuredTransport = configuredFarm.get_ref() as unknown as {
+      baseCall: BaseCallTransportObject;
+    };
+    assert.strictEqual(
+      defaultTransport.baseCall.allocator.share_arrays_memory.byteLength,
+      10 * 1024 * 1024,
+    );
+    assert.strictEqual(
+      configuredTransport.baseCall.allocator.share_arrays_memory.byteLength,
+      64 * 1024 * 1024,
+    );
+    const minimumTransport = minimumFarm.get_ref() as unknown as {
+      baseCall: BaseCallTransportObject;
+    };
+    assert.strictEqual(
+      minimumTransport.baseCall.allocator.share_arrays_memory.byteLength,
+      64,
+    );
+  } finally {
+    destroyFarm(defaultFarm);
+    destroyFarm(minimumFarm);
+    destroyFarm(configuredFarm);
   }
 });
 

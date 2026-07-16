@@ -34,6 +34,14 @@ export class WASIFarm {
     fds: Array<Fd> = [],
     options: {
       allocator_size?: number;
+      /**
+       * Shared payload allocator size for multiplexed base calls, in bytes.
+       *
+       * Defaults to 10 MiB. This is independent from `allocator_size`; requests
+       * and responses fail with `OutOfMemory` when the configured free capacity is
+       * insufficient.
+       */
+      base_call_allocator_size?: number;
       max_fds_limit?: number;
       /** Maximum concurrent user base calls, excluding one reserved system slot. */
       max_base_calls_limit?: number;
@@ -97,6 +105,7 @@ export class WASIFarm {
         options?.max_fds_limit,
         options?.unknown_fn,
         options?.max_base_calls_limit,
+        options?.base_call_allocator_size,
       );
     } else {
       throw new Error("Non SharedArrayBuffer is not supported yet");
