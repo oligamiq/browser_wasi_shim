@@ -1,5 +1,6 @@
 import {
   DESTROY_STATUS_BYTES,
+  readLifecycle,
   wakeDestroyWaiters,
   WorkerLifecycle,
 } from "./worker_lifecycle.ts";
@@ -80,6 +81,25 @@ export function workerRequestWaitDecision(
     return WorkerRequestWaitDecision.LifecycleDestroyed;
   }
   return WorkerRequestWaitDecision.Wait;
+}
+
+export function readWorkerRequestWaitSnapshot(
+  requestView: Int32Array,
+  destroyView: Int32Array,
+  afterLifecycleRead?: () => void,
+): {
+  lifecycle: WorkerLifecycle;
+  requestState: number;
+  decision: WorkerRequestWaitDecision;
+} {
+  const lifecycle = readLifecycle(destroyView);
+  afterLifecycleRead?.();
+  const requestState = Atomics.load(requestView, WORKER_REQUEST_STATE);
+  return {
+    lifecycle,
+    requestState,
+    decision: workerRequestWaitDecision(requestState, lifecycle),
+  };
 }
 
 export function createWorkerRequestView(

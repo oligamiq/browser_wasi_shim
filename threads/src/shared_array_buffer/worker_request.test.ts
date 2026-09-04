@@ -6,6 +6,7 @@ import {
   createWorkerRequestView,
   finishRuntimeCompletion,
   isWorkerRequestTerminal,
+  readWorkerRequestWaitSnapshot,
   RuntimeCompletion,
   WORKER_REQUEST_BYTES,
   WORKER_REQUEST_FAILURE,
@@ -18,6 +19,7 @@ import {
 } from "./worker_request.ts";
 import {
   createDestroyStatus,
+  DESTROY_CONTROL,
   DESTROY_WAKE_EPOCH,
   WorkerLifecycle,
 } from "./worker_lifecycle.ts";
@@ -244,6 +246,23 @@ describe("worker operation requests", () => {
         WorkerRequestWaitDecision.RequestTerminal,
       );
     }
+  });
+
+  test("samples lifecycle before the authoritative request state", () => {
+    const request = createRequest();
+    const destroy = new Int32Array(createDestroyStatus());
+    Atomics.store(destroy, DESTROY_CONTROL, WorkerLifecycle.Failed);
+
+    const snapshot = readWorkerRequestWaitSnapshot(request, destroy, () => {
+      Atomics.store(destroy, DESTROY_CONTROL, WorkerLifecycle.Running);
+      Atomics.store(request, WORKER_REQUEST_STATE, WorkerRequestState.Ready);
+    });
+
+    assert.deepStrictEqual(snapshot, {
+      lifecycle: WorkerLifecycle.Failed,
+      requestState: WorkerRequestState.Ready,
+      decision: WorkerRequestWaitDecision.RequestTerminal,
+    });
   });
 
   test("nonterminal requests wait only while lifecycle can still be completed by the coordinator", () => {

@@ -11,6 +11,7 @@ import {
 import {
   claimRuntimeCompletion,
   finishRuntimeCompletion,
+  readWorkerRequestWaitSnapshot,
   RuntimeCompletion,
   WORKER_REQUEST_BYTES,
   WORKER_REQUEST_FAILURE,
@@ -19,7 +20,6 @@ import {
   WorkerRequestFailure,
   WorkerRequestState,
   WorkerRequestWaitDecision,
-  workerRequestWaitDecision,
 } from "../worker_request.ts";
 import {
   SIGNATURE_REQUEST_STATUS_LEN,
@@ -233,9 +233,11 @@ export class WorkerBackgroundRef {
   private block_wait_worker_request(requestView: Int32Array): WorkerRef {
     const destroyView = new Int32Array(this.destroy_status);
     for (;;) {
-      const state = Atomics.load(requestView, WORKER_REQUEST_STATE);
-      const lifecycle = readLifecycle(destroyView);
-      const decision = workerRequestWaitDecision(state, lifecycle);
+      const {
+        lifecycle,
+        requestState: state,
+        decision,
+      } = readWorkerRequestWaitSnapshot(requestView, destroyView);
       if (decision === WorkerRequestWaitDecision.RequestTerminal) {
         return this.read_worker_request(requestView);
       }
@@ -263,9 +265,11 @@ export class WorkerBackgroundRef {
   ): Promise<WorkerRef> {
     const destroyView = new Int32Array(this.destroy_status);
     for (;;) {
-      const state = Atomics.load(requestView, WORKER_REQUEST_STATE);
-      const lifecycle = readLifecycle(destroyView);
-      const decision = workerRequestWaitDecision(state, lifecycle);
+      const {
+        lifecycle,
+        requestState: state,
+        decision,
+      } = readWorkerRequestWaitSnapshot(requestView, destroyView);
       if (decision === WorkerRequestWaitDecision.RequestTerminal) {
         return this.read_worker_request(requestView);
       }
