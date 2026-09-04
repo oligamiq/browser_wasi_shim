@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import assert from "node:assert";
+import { describe, test } from "node:test";
 import {
   beginDestroy,
   createDestroyStatus,
@@ -22,30 +23,30 @@ describe("worker destroy control", () => {
     const status = createDestroyStatus();
     const view = new Int32Array(status);
 
-    expect(beginDestroy(view, 41)).toBe(true);
-    expect(readLifecycle(view)).toBe(WorkerLifecycle.Destroying);
-    expect(readRequesterAnimalId(view)).toBe(41);
+    assert.strictEqual(beginDestroy(view, 41), true);
+    assert.strictEqual(readLifecycle(view), WorkerLifecycle.Destroying);
+    assert.strictEqual(readRequesterAnimalId(view), 41);
   });
 
   test("allows only one destroy winner", () => {
     const view = new Int32Array(createDestroyStatus());
 
-    expect(beginDestroy(view, 7)).toBe(true);
-    expect(beginDestroy(view, 8)).toBe(false);
-    expect(readRequesterAnimalId(view)).toBe(7);
+    assert.strictEqual(beginDestroy(view, 7), true);
+    assert.strictEqual(beginDestroy(view, 8), false);
+    assert.strictEqual(readRequesterAnimalId(view), 7);
   });
 
   test("uses an unbound requester code for controller destroy", () => {
     const view = new Int32Array(createDestroyStatus());
 
-    expect(beginDestroy(view)).toBe(true);
-    expect(readRequesterAnimalId(view)).toBeUndefined();
+    assert.strictEqual(beginDestroy(view), true);
+    assert.strictEqual(readRequesterAnimalId(view), undefined);
   });
 
   test("rejects an animal id that cannot fit in CONTROL", () => {
     const view = new Int32Array(createDestroyStatus());
 
-    expect(() => beginDestroy(view, 2 ** 30 - 1)).toThrow(RangeError);
+    assert.throws(() => beginDestroy(view, 2 ** 30 - 1), RangeError);
   });
 
   test("settles all terminal waiters", async () => {
@@ -54,8 +55,8 @@ describe("worker destroy control", () => {
     const first = waitForDestroyTerminal(view);
     const second = waitForDestroyTerminal(view);
     markDestroyed(view);
-    await expect(first).resolves.toBeUndefined();
-    await expect(second).resolves.toBeUndefined();
+    assert.strictEqual(await first, undefined);
+    assert.strictEqual(await second, undefined);
   });
 
   test("reports a stable terminal failure", async () => {
@@ -63,7 +64,7 @@ describe("worker destroy control", () => {
     beginDestroy(view);
     const completion = waitForDestroyTerminal(view);
     markDestroyFailed(view, WorkerDestroyFailureCode.CoordinatorRuntime);
-    await expect(completion).rejects.toBeInstanceOf(WorkerDestroyError);
+    await assert.rejects(completion, WorkerDestroyError);
   });
 
   test("coordinates requester drained and closing states", async () => {
@@ -78,21 +79,28 @@ describe("worker destroy control", () => {
     wakeDestroyWaiters(view);
     await drained;
     markRequesterClosing(view);
-    expect(Atomics.load(view, DESTROY_REQUESTER_STATUS)).toBe(
+    assert.strictEqual(
+      Atomics.load(view, DESTROY_REQUESTER_STATUS),
       RequesterStatus.Closing,
     );
   });
 
   test("Running->Failed throws Protocol and leaves failure code None", () => {
     const view = new Int32Array(createDestroyStatus());
-    expect(readLifecycle(view)).toBe(WorkerLifecycle.Running);
+    assert.strictEqual(readLifecycle(view), WorkerLifecycle.Running);
 
-    expect(() =>
-      markDestroyFailed(view, WorkerDestroyFailureCode.WorkerBootstrap),
-    ).toThrow(new WorkerDestroyError(WorkerDestroyFailureCode.Protocol));
+    assert.throws(
+      () => markDestroyFailed(view, WorkerDestroyFailureCode.WorkerBootstrap),
+      (error: unknown) => {
+        assert.ok(error instanceof WorkerDestroyError);
+        assert.strictEqual(error.code, WorkerDestroyFailureCode.Protocol);
+        return true;
+      },
+    );
 
-    expect(readLifecycle(view)).toBe(WorkerLifecycle.Running);
-    expect(Atomics.load(view, 2 /* DESTROY_FAILURE_CODE */)).toBe(
+    assert.strictEqual(readLifecycle(view), WorkerLifecycle.Running);
+    assert.strictEqual(
+      Atomics.load(view, 2 /* DESTROY_FAILURE_CODE */),
       WorkerDestroyFailureCode.None,
     );
   });
@@ -101,20 +109,22 @@ describe("worker destroy control", () => {
     const view1 = new Int32Array(createDestroyStatus());
     beginDestroy(view1);
     markDestroyed(view1);
-    expect(readLifecycle(view1)).toBe(WorkerLifecycle.Destroyed);
+    assert.strictEqual(readLifecycle(view1), WorkerLifecycle.Destroyed);
     markDestroyFailed(view1, WorkerDestroyFailureCode.WorkerBootstrap);
-    expect(readLifecycle(view1)).toBe(WorkerLifecycle.Destroyed);
+    assert.strictEqual(readLifecycle(view1), WorkerLifecycle.Destroyed);
 
     const view2 = new Int32Array(createDestroyStatus());
     beginDestroy(view2);
     markDestroyFailed(view2, WorkerDestroyFailureCode.CoordinatorRuntime);
-    expect(readLifecycle(view2)).toBe(WorkerLifecycle.Failed);
-    expect(Atomics.load(view2, 2 /* DESTROY_FAILURE_CODE */)).toBe(
+    assert.strictEqual(readLifecycle(view2), WorkerLifecycle.Failed);
+    assert.strictEqual(
+      Atomics.load(view2, 2 /* DESTROY_FAILURE_CODE */),
       WorkerDestroyFailureCode.CoordinatorRuntime,
     );
     markDestroyed(view2);
-    expect(readLifecycle(view2)).toBe(WorkerLifecycle.Failed);
-    expect(Atomics.load(view2, 2 /* DESTROY_FAILURE_CODE */)).toBe(
+    assert.strictEqual(readLifecycle(view2), WorkerLifecycle.Failed);
+    assert.strictEqual(
+      Atomics.load(view2, 2 /* DESTROY_FAILURE_CODE */),
       WorkerDestroyFailureCode.CoordinatorRuntime,
     );
   });

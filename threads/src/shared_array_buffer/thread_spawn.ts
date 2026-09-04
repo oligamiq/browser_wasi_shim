@@ -127,6 +127,13 @@ export class ThreadSpawner {
       this.share_memory = share_memory;
     }
 
+    this.worker_background_ref_object =
+      worker_background_ref_object ??
+      WorkerBackgroundRefObjectConstructor(this.destroy_status);
+    this.worker_background_ref = WorkerBackgroundRef.init_self(
+      this.worker_background_ref_object,
+    );
+
     if (worker_background_ref_object === undefined) {
       let worker_background_worker_url__: string;
       if (worker_background_worker_url) {
@@ -147,12 +154,6 @@ export class ThreadSpawner {
         this.worker_background_worker_promise = undefined;
         resolve();
       };
-      this.worker_background_ref_object = WorkerBackgroundRefObjectConstructor(
-        this.destroy_status,
-      );
-      this.worker_background_ref = WorkerBackgroundRef.init_self(
-        this.worker_background_ref_object,
-      );
       this.worker_background_worker.postMessage({
         override_object: {
           sl_object: this.get_object(),
@@ -162,11 +163,6 @@ export class ThreadSpawner {
           this.worker_background_ref_object,
         ),
       });
-    } else {
-      this.worker_background_ref_object = worker_background_ref_object;
-      this.worker_background_ref = WorkerBackgroundRef.init_self(
-        this.worker_background_ref_object,
-      );
     }
   }
 
