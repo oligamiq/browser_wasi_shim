@@ -82,4 +82,40 @@ describe("worker destroy control", () => {
       RequesterStatus.Closing,
     );
   });
+
+  test("Running->Failed throws Protocol and leaves failure code None", () => {
+    const view = new Int32Array(createDestroyStatus());
+    expect(readLifecycle(view)).toBe(WorkerLifecycle.Running);
+
+    expect(() =>
+      markDestroyFailed(view, WorkerDestroyFailureCode.WorkerBootstrap),
+    ).toThrow(new WorkerDestroyError(WorkerDestroyFailureCode.Protocol));
+
+    expect(readLifecycle(view)).toBe(WorkerLifecycle.Running);
+    expect(Atomics.load(view, 2 /* DESTROY_FAILURE_CODE */)).toBe(
+      WorkerDestroyFailureCode.None,
+    );
+  });
+
+  test("opposite terminal transition after a winner is non-throwing and leaves winner unchanged", () => {
+    const view1 = new Int32Array(createDestroyStatus());
+    beginDestroy(view1);
+    markDestroyed(view1);
+    expect(readLifecycle(view1)).toBe(WorkerLifecycle.Destroyed);
+    markDestroyFailed(view1, WorkerDestroyFailureCode.WorkerBootstrap);
+    expect(readLifecycle(view1)).toBe(WorkerLifecycle.Destroyed);
+
+    const view2 = new Int32Array(createDestroyStatus());
+    beginDestroy(view2);
+    markDestroyFailed(view2, WorkerDestroyFailureCode.CoordinatorRuntime);
+    expect(readLifecycle(view2)).toBe(WorkerLifecycle.Failed);
+    expect(Atomics.load(view2, 2 /* DESTROY_FAILURE_CODE */)).toBe(
+      WorkerDestroyFailureCode.CoordinatorRuntime,
+    );
+    markDestroyed(view2);
+    expect(readLifecycle(view2)).toBe(WorkerLifecycle.Failed);
+    expect(Atomics.load(view2, 2 /* DESTROY_FAILURE_CODE */)).toBe(
+      WorkerDestroyFailureCode.CoordinatorRuntime,
+    );
+  });
 });

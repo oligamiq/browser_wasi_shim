@@ -83,7 +83,12 @@ function finishDestroy(view: Int32Array, next: WorkerLifecycle): void {
   for (;;) {
     const control = Atomics.load(view, DESTROY_CONTROL);
     const lifecycle = control & LIFECYCLE_MASK;
-    if (lifecycle === next) return;
+    if (
+      lifecycle === WorkerLifecycle.Destroyed ||
+      lifecycle === WorkerLifecycle.Failed
+    ) {
+      return;
+    }
     if (lifecycle !== WorkerLifecycle.Destroying) {
       throw new WorkerDestroyError(WorkerDestroyFailureCode.Protocol);
     }
@@ -113,6 +118,9 @@ export function markDestroyFailed(
   ) {
     return;
   }
+  if (lifecycle === WorkerLifecycle.Running) {
+    throw new WorkerDestroyError(WorkerDestroyFailureCode.Protocol);
+  }
   Atomics.compareExchange(
     view,
     DESTROY_FAILURE_CODE,
@@ -122,12 +130,11 @@ export function markDestroyFailed(
   finishDestroy(view, WorkerLifecycle.Failed);
 }
 
-async function waitForWake(view: Int32Array, expectedEpoch: number): Promise<void> {
-  const { value } = Atomics.waitAsync(
-    view,
-    DESTROY_WAKE_EPOCH,
-    expectedEpoch,
-  );
+async function waitForWake(
+  view: Int32Array,
+  expectedEpoch: number,
+): Promise<void> {
+  const { value } = Atomics.waitAsync(view, DESTROY_WAKE_EPOCH, expectedEpoch);
   const result = value instanceof Promise ? await value : value;
   if (result === "timed-out") throw new Error("atomic wait timed out");
 }
@@ -147,7 +154,9 @@ export async function waitForDestroyTerminal(view: Int32Array): Promise<void> {
 }
 
 export async function waitForRequesterDrained(view: Int32Array): Promise<void> {
-  while (Atomics.load(view, DESTROY_REQUESTER_STATUS) === RequesterStatus.None) {
+  while (
+    Atomics.load(view, DESTROY_REQUESTER_STATUS) === RequesterStatus.None
+  ) {
     const lifecycle = readLifecycle(view);
     if (lifecycle === WorkerLifecycle.Failed) {
       throw new WorkerDestroyError(
@@ -166,11 +175,6 @@ export async function waitForRequesterDrained(view: Int32Array): Promise<void> {
 }
 
 export function markRequesterClosing(view: Int32Array): void {
-  Atomics.store(
-    view,
-    DESTROY_REQUESTER_STATUS,
-    RequesterStatus.Closing,
-  );
-  Atomics.notify(view, DESTROY_REQUESTER_STATUS);
+  Atomics.store(view, DESTROY_REQUESTER_STATUS, RequesterStatus.Closing);
   wakeDestroyWaiters(view);
 }
