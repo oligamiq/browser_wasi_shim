@@ -24,6 +24,7 @@ import {
   WorkerBackgroundRef,
 } from "./worker_background/index.ts";
 import { WorkerBackgroundRefObjectConstructor } from "./worker_background/worker_export.ts";
+import { createDestroyStatus } from "./worker_lifecycle.ts";
 
 /**
  * Represents the serialized state of a ThreadSpawner for thread transfer.
@@ -98,7 +99,10 @@ export class ThreadSpawner {
     this.worker_url = worker_url;
     this.wasi_farm_refs_object = wasi_farm_refs_object;
 
-    this.destroy_status = destroy_status ?? new SharedArrayBuffer(8);
+    this.destroy_status =
+      worker_background_ref_object?.destroy_status ??
+      destroy_status ??
+      createDestroyStatus();
     this.animal_id_counter = animal_id_counter ?? new SharedArrayBuffer(4);
 
     if (share_memory === undefined) {
@@ -143,8 +147,9 @@ export class ThreadSpawner {
         this.worker_background_worker_promise = undefined;
         resolve();
       };
-      this.worker_background_ref_object =
-        WorkerBackgroundRefObjectConstructor();
+      this.worker_background_ref_object = WorkerBackgroundRefObjectConstructor(
+        this.destroy_status,
+      );
       this.worker_background_ref = WorkerBackgroundRef.init_self(
         this.worker_background_ref_object,
       );

@@ -7,23 +7,29 @@ export type WorkerBackgroundRefObject = {
   allocator: AllocatorUseArrayBufferObject;
   lock: SharedArrayBuffer;
   signature_input: SharedArrayBuffer;
+  destroy_status: SharedArrayBuffer;
 };
+
+export const SIGNATURE_REQUEST_STATUS_PTR = 6;
+export const SIGNATURE_REQUEST_STATUS_LEN = 7;
 
 /**
  * Constructs a new default WorkerBackgroundRefObject.
  *
  * @returns A WorkerBackgroundRefObject with initialized SharedArrayBuffers.
  */
-export const WorkerBackgroundRefObjectConstructor =
-  (): WorkerBackgroundRefObject => {
-    return {
-      allocator: {
-        share_arrays_memory: new SharedArrayBuffer(10 * 1024),
-      },
-      lock: new SharedArrayBuffer(24),
-      signature_input: new SharedArrayBuffer(24),
-    };
+export const WorkerBackgroundRefObjectConstructor = (
+  destroyStatus: SharedArrayBuffer,
+): WorkerBackgroundRefObject => {
+  return {
+    allocator: {
+      share_arrays_memory: new SharedArrayBuffer(10 * 1024),
+    },
+    lock: new SharedArrayBuffer(24),
+    signature_input: new SharedArrayBuffer(32),
+    destroy_status: destroyStatus,
   };
+};
 
 export type WorkerOptions = {
   type: "module" | "";

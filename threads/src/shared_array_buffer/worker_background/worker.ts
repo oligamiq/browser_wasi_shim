@@ -21,6 +21,7 @@ class WorkerBackground<T> {
   // 1: call
   private lock: SharedArrayBuffer;
   private signature_input: SharedArrayBuffer;
+  private destroy_status: SharedArrayBuffer;
 
   // worker_id starts from 1
   private workers: Array<Worker | undefined> = [undefined];
@@ -33,16 +34,18 @@ class WorkerBackground<T> {
 
   constructor(
     override_object: T,
+    destroy_status: SharedArrayBuffer,
     lock?: SharedArrayBuffer,
     allocator?: AllocatorUseArrayBuffer,
     signature_input?: SharedArrayBuffer,
   ) {
     this.override_object = override_object;
+    this.destroy_status = destroy_status;
     this.lock = lock ?? new SharedArrayBuffer(24);
     this.allocator =
       allocator ??
       new AllocatorUseArrayBuffer(new SharedArrayBuffer(10 * 1024));
-    this.signature_input = signature_input ?? new SharedArrayBuffer(24);
+    this.signature_input = signature_input ?? new SharedArrayBuffer(32);
 
     this.listen_holder = this.listen();
   }
@@ -53,6 +56,7 @@ class WorkerBackground<T> {
   ): WorkerBackground<T> {
     return new WorkerBackground(
       override_object,
+      worker_background_ref_object.destroy_status,
       worker_background_ref_object.lock,
       AllocatorUseArrayBuffer.init_self(worker_background_ref_object.allocator),
       worker_background_ref_object.signature_input,
@@ -74,6 +78,7 @@ class WorkerBackground<T> {
       allocator: this.allocator.get_object(),
       lock: this.lock,
       signature_input: this.signature_input,
+      destroy_status: this.destroy_status,
     };
   }
 

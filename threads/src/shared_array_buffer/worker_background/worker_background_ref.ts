@@ -16,6 +16,7 @@ export class WorkerBackgroundRef {
   private allocator: AllocatorUseArrayBuffer;
   private lock: SharedArrayBuffer;
   private signature_input: SharedArrayBuffer;
+  private destroy_status: SharedArrayBuffer;
 
   /**
    * Initializes a new WorkerBackgroundRef.
@@ -28,10 +29,12 @@ export class WorkerBackgroundRef {
     allocator: AllocatorUseArrayBuffer,
     lock: SharedArrayBuffer,
     signature_input: SharedArrayBuffer,
+    destroy_status: SharedArrayBuffer,
   ) {
     this.allocator = allocator;
     this.lock = lock;
     this.signature_input = signature_input;
+    this.destroy_status = destroy_status;
   }
 
   private block_lock_base_func(): void {
@@ -93,6 +96,15 @@ export class WorkerBackgroundRef {
     const view = new Int32Array(this.lock);
     Atomics.store(view, 0, 0);
     Atomics.notify(view, 0, 1);
+  }
+
+  get_object(): WorkerBackgroundRefObject {
+    return {
+      allocator: this.allocator.get_object(),
+      lock: this.lock,
+      signature_input: this.signature_input,
+      destroy_status: this.destroy_status,
+    };
   }
 
   /**
@@ -180,6 +192,7 @@ export class WorkerBackgroundRef {
       AllocatorUseArrayBuffer.init_self(sl.allocator),
       sl.lock,
       sl.signature_input,
+      sl.destroy_status,
     );
   }
 
