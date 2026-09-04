@@ -9,6 +9,8 @@ export type AllocatorUseArrayBufferObject = {
   share_arrays_memory: SharedArrayBuffer;
 };
 
+export const ALLOCATOR_DATA_OFFSET = 12;
+
 /**
  * AllocatorUseArrayBuffer provides a simple shared memory allocator built on top of `SharedArrayBuffer`.
  *
@@ -71,7 +73,7 @@ export class AllocatorUseArrayBuffer {
       const view = new Int32Array(this.share_arrays_memory);
       Atomics.store(view, 0, 0);
       Atomics.store(view, 1, 0);
-      Atomics.store(view, 2, 12);
+      Atomics.store(view, 2, ALLOCATOR_DATA_OFFSET);
     }
   }
 
@@ -176,7 +178,7 @@ export class AllocatorUseArrayBuffer {
     if (old_num === 0) {
       // Reset because there were no users.
       // debug.log("reset allocator");
-      share_arrays_memory_kept = Atomics.store(view, 2, 12);
+      share_arrays_memory_kept = Atomics.store(view, 2, ALLOCATOR_DATA_OFFSET);
     } else {
       share_arrays_memory_kept = Atomics.load(view, 2);
     }
@@ -244,6 +246,23 @@ export class AllocatorUseArrayBuffer {
     const view = new Uint8Array(data);
     view.set(new Uint8Array(this.share_arrays_memory).slice(ptr, ptr + len));
     return data;
+  }
+
+  take_memory(ptr: number, len: number): ArrayBuffer {
+    if (
+      !Number.isInteger(ptr) ||
+      !Number.isInteger(len) ||
+      ptr < ALLOCATOR_DATA_OFFSET ||
+      len < 0 ||
+      ptr > this.share_arrays_memory.byteLength - len
+    ) {
+      throw new RangeError("allocation is outside allocator data memory");
+    }
+    try {
+      return this.get_memory(ptr, len);
+    } finally {
+      this.free(ptr, len);
+    }
   }
 
   // Write again to the memory before releasing

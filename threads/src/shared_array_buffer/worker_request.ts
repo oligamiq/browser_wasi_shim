@@ -1,7 +1,9 @@
 import {
   DESTROY_STATUS_BYTES,
   wakeDestroyWaiters,
+  WorkerLifecycle,
 } from "./worker_lifecycle.ts";
+import { ALLOCATOR_DATA_OFFSET } from "./allocator.ts";
 
 export const WORKER_REQUEST_BYTES = 12;
 export const WORKER_REQUEST_STATE = 0;
@@ -23,6 +25,13 @@ export enum WorkerRequestFailure {
   AnimalConstruction = 3,
   WasmInstantiation = 4,
   Protocol = 5,
+}
+
+export enum WorkerRequestWaitDecision {
+  Wait,
+  RequestTerminal,
+  LifecycleFailed,
+  LifecycleDestroyed,
 }
 
 export enum RuntimeCompletion {
@@ -57,14 +66,30 @@ export function isWorkerRequestTerminal(state: number): boolean {
   );
 }
 
+export function workerRequestWaitDecision(
+  requestState: number,
+  lifecycle: WorkerLifecycle,
+): WorkerRequestWaitDecision {
+  if (isWorkerRequestTerminal(requestState)) {
+    return WorkerRequestWaitDecision.RequestTerminal;
+  }
+  if (lifecycle === WorkerLifecycle.Failed) {
+    return WorkerRequestWaitDecision.LifecycleFailed;
+  }
+  if (lifecycle === WorkerLifecycle.Destroyed) {
+    return WorkerRequestWaitDecision.LifecycleDestroyed;
+  }
+  return WorkerRequestWaitDecision.Wait;
+}
+
 export function createWorkerRequestView(
   memory: SharedArrayBuffer,
   pointer: number,
   length: number,
 ): Int32Array {
-  if (!Number.isInteger(pointer) || pointer < 0) {
+  if (!Number.isInteger(pointer) || pointer < ALLOCATOR_DATA_OFFSET) {
     throw new RangeError(
-      "worker request pointer must be a non-negative integer",
+      "worker request pointer must be in allocator data memory",
     );
   }
   if (!Number.isInteger(length) || length !== WORKER_REQUEST_BYTES) {

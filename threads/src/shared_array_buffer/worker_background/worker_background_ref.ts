@@ -10,9 +10,7 @@ import {
 } from "../worker_lifecycle.ts";
 import {
   claimRuntimeCompletion,
-  completeWorkerRequest,
   finishRuntimeCompletion,
-  isWorkerRequestTerminal,
   RuntimeCompletion,
   WORKER_REQUEST_BYTES,
   WORKER_REQUEST_FAILURE,
@@ -20,6 +18,8 @@ import {
   WORKER_REQUEST_STATE,
   WorkerRequestFailure,
   WorkerRequestState,
+  WorkerRequestWaitDecision,
+  workerRequestWaitDecision,
 } from "../worker_request.ts";
 import {
   SIGNATURE_REQUEST_STATUS_LEN,
@@ -234,26 +234,16 @@ export class WorkerBackgroundRef {
     const destroyView = new Int32Array(this.destroy_status);
     for (;;) {
       const state = Atomics.load(requestView, WORKER_REQUEST_STATE);
-      if (isWorkerRequestTerminal(state)) {
+      const lifecycle = readLifecycle(destroyView);
+      const decision = workerRequestWaitDecision(state, lifecycle);
+      if (decision === WorkerRequestWaitDecision.RequestTerminal) {
         return this.read_worker_request(requestView);
       }
-
-      const lifecycle = readLifecycle(destroyView);
-      if (lifecycle !== WorkerLifecycle.Running) {
-        if (state === WorkerRequestState.Pending) {
-          if (
-            completeWorkerRequest(
-              requestView,
-              WorkerRequestState.Cancelled,
-              WorkerRequestFailure.Destroyed,
-              0,
-              destroyView,
-            )
-          ) {
-            throw this.lifecycle_error(destroyView);
-          }
-          continue;
-        }
+      if (decision === WorkerRequestWaitDecision.LifecycleFailed) {
+        throw this.lifecycle_error(destroyView);
+      }
+      if (decision === WorkerRequestWaitDecision.LifecycleDestroyed) {
+        throw new WorkerDestroyError(WorkerDestroyFailureCode.Protocol);
       }
 
       const epoch = Atomics.load(destroyView, DESTROY_WAKE_EPOCH);
@@ -274,27 +264,16 @@ export class WorkerBackgroundRef {
     const destroyView = new Int32Array(this.destroy_status);
     for (;;) {
       const state = Atomics.load(requestView, WORKER_REQUEST_STATE);
-      if (isWorkerRequestTerminal(state)) {
+      const lifecycle = readLifecycle(destroyView);
+      const decision = workerRequestWaitDecision(state, lifecycle);
+      if (decision === WorkerRequestWaitDecision.RequestTerminal) {
         return this.read_worker_request(requestView);
       }
-
-      const lifecycle = readLifecycle(destroyView);
-      if (
-        lifecycle !== WorkerLifecycle.Running &&
-        state === WorkerRequestState.Pending
-      ) {
-        if (
-          completeWorkerRequest(
-            requestView,
-            WorkerRequestState.Cancelled,
-            WorkerRequestFailure.Destroyed,
-            0,
-            destroyView,
-          )
-        ) {
-          throw this.lifecycle_error(destroyView);
-        }
-        continue;
+      if (decision === WorkerRequestWaitDecision.LifecycleFailed) {
+        throw this.lifecycle_error(destroyView);
+      }
+      if (decision === WorkerRequestWaitDecision.LifecycleDestroyed) {
+        throw new WorkerDestroyError(WorkerDestroyFailureCode.Protocol);
       }
 
       const epoch = Atomics.load(destroyView, DESTROY_WAKE_EPOCH);

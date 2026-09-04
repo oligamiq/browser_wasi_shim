@@ -108,6 +108,12 @@ class WorkerBackground<T> {
     }
   }
 
+  private is_active_record(record: WorkerRecord): boolean {
+    return record.worker_id === 0
+      ? this.start_worker === record
+      : this.workers[record.worker_id] === record;
+  }
+
   private terminate_registered_workers(): void {
     const records = new Set<WorkerRecord>();
     for (const record of this.workers) {
@@ -143,6 +149,10 @@ class WorkerBackground<T> {
   }
 
   private complete_request_ready(record: WorkerRecord): boolean {
+    if (!this.is_active_record(record)) {
+      record.worker.terminate();
+      return false;
+    }
     const requestView = record.request_view;
     record.request_view = undefined;
     if (requestView === undefined) return false;
@@ -168,6 +178,10 @@ class WorkerBackground<T> {
     record: WorkerRecord,
     failure: WorkerRequestFailure,
   ): void {
+    if (!this.is_active_record(record)) {
+      record.worker.terminate();
+      return;
+    }
     const requestView = record.request_view;
     record.request_view = undefined;
     if (requestView !== undefined) {
@@ -219,21 +233,7 @@ class WorkerBackground<T> {
   }
 
   private take_allocation(pointer: number, length: number): ArrayBuffer {
-    const memoryLength = this.allocator.share_arrays_memory.byteLength;
-    if (
-      !Number.isInteger(pointer) ||
-      !Number.isInteger(length) ||
-      pointer < 0 ||
-      length < 0 ||
-      pointer > memoryLength - length
-    ) {
-      throw new RangeError("command allocation is outside shared memory");
-    }
-    try {
-      return this.allocator.get_memory(pointer, length);
-    } finally {
-      this.allocator.free(pointer, length);
-    }
+    return this.allocator.take_memory(pointer, length);
   }
 
   private read_command(signatureView: Int32Array): WorkerCommand {
@@ -313,6 +313,10 @@ class WorkerBackground<T> {
 
   private register_handlers(record: WorkerRecord, isStart: boolean): void {
     record.worker.onmessage = (event: MessageEvent) => {
+      if (!this.is_active_record(record)) {
+        record.worker.terminate();
+        return;
+      }
       const data = event.data;
       if (data === null || typeof data !== "object") {
         if (record.request_view !== undefined) {
@@ -330,18 +334,19 @@ class WorkerBackground<T> {
       };
       if (message.msg === "ready") {
         if (!isStart && !this.complete_request_ready(record)) return;
-        const active = isStart
-          ? this.start_worker === record
-          : this.workers[record.worker_id] === record;
-        if (active && message.animal_id !== undefined) {
+        if (message.animal_id !== undefined) {
           this.animal_workers.set(message.animal_id, record);
         }
         return;
       }
 
       if (message.msg === "done") {
-        this.remove_record(record);
-        record.worker.terminate();
+        if (record.request_view !== undefined) {
+          this.complete_request_failure(record, WorkerRequestFailure.Protocol);
+        } else {
+          this.remove_record(record);
+          record.worker.terminate();
+        }
         if (isStart) {
           this.terminate_registered_workers();
           this.publish_runtime_done();
@@ -364,10 +369,20 @@ class WorkerBackground<T> {
         } else {
           this.publish_runtime_exit(message.code ?? 1);
         }
+        return;
       }
+
+      if (record.request_view !== undefined) {
+        this.complete_request_failure(record, WorkerRequestFailure.Protocol);
+      }
+      this.fail_current_runtime(new Error("unknown worker message"));
     };
 
     record.worker.onerror = (event) => {
+      if (!this.is_active_record(record)) {
+        record.worker.terminate();
+        return;
+      }
       event.preventDefault();
       if (record.request_view !== undefined) {
         this.complete_request_failure(record, WorkerRequestFailure.ScriptLoad);
@@ -375,6 +390,10 @@ class WorkerBackground<T> {
       this.fail_current_runtime(new Error(event.message));
     };
     record.worker.onmessageerror = () => {
+      if (!this.is_active_record(record)) {
+        record.worker.terminate();
+        return;
+      }
       if (record.request_view !== undefined) {
         this.complete_request_failure(record, WorkerRequestFailure.Protocol);
       }

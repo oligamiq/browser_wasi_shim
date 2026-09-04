@@ -13,8 +13,14 @@ import {
   WORKER_REQUEST_STATE,
   WorkerRequestFailure,
   WorkerRequestState,
+  WorkerRequestWaitDecision,
+  workerRequestWaitDecision,
 } from "./worker_request.ts";
-import { createDestroyStatus, DESTROY_WAKE_EPOCH } from "./worker_lifecycle.ts";
+import {
+  createDestroyStatus,
+  DESTROY_WAKE_EPOCH,
+  WorkerLifecycle,
+} from "./worker_lifecycle.ts";
 
 function createRequest(): Int32Array {
   return new Int32Array(new SharedArrayBuffer(WORKER_REQUEST_BYTES));
@@ -189,7 +195,13 @@ describe("worker operation requests", () => {
   test("validates signed request metadata before creating a view", () => {
     const memory = new SharedArrayBuffer(64);
 
-    assert.strictEqual(createWorkerRequestView(memory, 16, 12).byteOffset, 16);
+    assert.strictEqual(createWorkerRequestView(memory, 12, 12).byteOffset, 12);
+    for (const pointer of [0, 4, 8]) {
+      assert.throws(
+        () => createWorkerRequestView(memory, pointer, 12),
+        RangeError,
+      );
+    }
     assert.throws(() => createWorkerRequestView(memory, -4, 12), RangeError);
     assert.throws(() => createWorkerRequestView(memory, 14, 12), RangeError);
     assert.throws(() => createWorkerRequestView(memory, 16, -1), RangeError);
@@ -215,5 +227,46 @@ describe("worker operation requests", () => {
     ]);
     assert.strictEqual(claimRuntimeCompletion(completion), false);
     assert.strictEqual(Atomics.load(completion, 0), RuntimeCompletion.Exit);
+  });
+
+  test("request terminal state wins over lifecycle terminal state", () => {
+    for (const requestState of [
+      WorkerRequestState.Ready,
+      WorkerRequestState.Failed,
+      WorkerRequestState.Cancelled,
+    ]) {
+      assert.strictEqual(
+        workerRequestWaitDecision(requestState, WorkerLifecycle.Failed),
+        WorkerRequestWaitDecision.RequestTerminal,
+      );
+      assert.strictEqual(
+        workerRequestWaitDecision(requestState, WorkerLifecycle.Destroyed),
+        WorkerRequestWaitDecision.RequestTerminal,
+      );
+    }
+  });
+
+  test("nonterminal requests wait only while lifecycle can still be completed by the coordinator", () => {
+    for (const requestState of [
+      WorkerRequestState.Pending,
+      WorkerRequestState.Completing,
+    ]) {
+      assert.strictEqual(
+        workerRequestWaitDecision(requestState, WorkerLifecycle.Running),
+        WorkerRequestWaitDecision.Wait,
+      );
+      assert.strictEqual(
+        workerRequestWaitDecision(requestState, WorkerLifecycle.Destroying),
+        WorkerRequestWaitDecision.Wait,
+      );
+      assert.strictEqual(
+        workerRequestWaitDecision(requestState, WorkerLifecycle.Failed),
+        WorkerRequestWaitDecision.LifecycleFailed,
+      );
+      assert.strictEqual(
+        workerRequestWaitDecision(requestState, WorkerLifecycle.Destroyed),
+        WorkerRequestWaitDecision.LifecycleDestroyed,
+      );
+    }
   });
 });
