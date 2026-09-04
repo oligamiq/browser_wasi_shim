@@ -1,9 +1,45 @@
 import { AllocatorUseArrayBuffer } from "../allocator.ts";
 import * as Serializer from "../serialize_error.ts";
+import {
+  DESTROY_FAILURE_CODE,
+  DESTROY_WAKE_EPOCH,
+  readLifecycle,
+  WorkerDestroyError,
+  WorkerDestroyFailureCode,
+  WorkerLifecycle,
+} from "../worker_lifecycle.ts";
+import {
+  claimRuntimeCompletion,
+  completeWorkerRequest,
+  finishRuntimeCompletion,
+  isWorkerRequestTerminal,
+  RuntimeCompletion,
+  WORKER_REQUEST_BYTES,
+  WORKER_REQUEST_FAILURE,
+  WORKER_REQUEST_ID,
+  WORKER_REQUEST_STATE,
+  WorkerRequestFailure,
+  WorkerRequestState,
+} from "../worker_request.ts";
+import {
+  SIGNATURE_REQUEST_STATUS_LEN,
+  SIGNATURE_REQUEST_STATUS_PTR,
+} from "./worker_export.ts";
 import type {
   WorkerBackgroundRefObject,
   WorkerOptions,
 } from "./worker_export.ts";
+
+type Allocation = {
+  ptr: number;
+  len: number;
+};
+
+type WorkerRequestAllocation = Allocation & {
+  allocationPtr: number;
+  allocationLen: number;
+  view: Int32Array;
+};
 
 /**
  * WorkerBackgroundRef provides a thread-safe interface for communicating with
@@ -111,6 +147,173 @@ export class WorkerBackgroundRef {
     Atomics.notify(new Int32Array(this.lock), 1);
   }
 
+  private lifecycle_error(destroyView: Int32Array): WorkerDestroyError {
+    const code =
+      readLifecycle(destroyView) === WorkerLifecycle.Failed
+        ? (Atomics.load(
+            destroyView,
+            DESTROY_FAILURE_CODE,
+          ) as WorkerDestroyFailureCode)
+        : WorkerDestroyFailureCode.Protocol;
+    return new WorkerDestroyError(code);
+  }
+
+  private assert_running(): void {
+    const destroyView = new Int32Array(this.destroy_status);
+    if (readLifecycle(destroyView) !== WorkerLifecycle.Running) {
+      throw this.lifecycle_error(destroyView);
+    }
+  }
+
+  private block_allocate(data: Uint8Array): Allocation {
+    const address = new SharedArrayBuffer(8);
+    const [ptr, len] = this.allocator.block_write(data, address, 0);
+    return { ptr, len };
+  }
+
+  private async async_allocate(data: Uint8Array): Promise<Allocation> {
+    const address = new SharedArrayBuffer(8);
+    const [ptr, len] = await this.allocator.async_write(data, address, 0);
+    return { ptr, len };
+  }
+
+  private block_allocate_worker_request(): WorkerRequestAllocation {
+    const allocation = this.block_allocate(
+      new Uint8Array(WORKER_REQUEST_BYTES + 3),
+    );
+    const ptr = (allocation.ptr + 3) & ~3;
+    return {
+      allocationPtr: allocation.ptr,
+      allocationLen: allocation.len,
+      ptr,
+      len: WORKER_REQUEST_BYTES,
+      view: new Int32Array(
+        this.allocator.share_arrays_memory,
+        ptr,
+        WORKER_REQUEST_BYTES / 4,
+      ),
+    };
+  }
+
+  private async async_allocate_worker_request(): Promise<WorkerRequestAllocation> {
+    const allocation = await this.async_allocate(
+      new Uint8Array(WORKER_REQUEST_BYTES + 3),
+    );
+    const ptr = (allocation.ptr + 3) & ~3;
+    return {
+      allocationPtr: allocation.ptr,
+      allocationLen: allocation.len,
+      ptr,
+      len: WORKER_REQUEST_BYTES,
+      view: new Int32Array(
+        this.allocator.share_arrays_memory,
+        ptr,
+        WORKER_REQUEST_BYTES / 4,
+      ),
+    };
+  }
+
+  private read_worker_request(view: Int32Array): WorkerRef {
+    const state = Atomics.load(view, WORKER_REQUEST_STATE);
+    if (state === WorkerRequestState.Ready) {
+      return new WorkerRef(Atomics.load(view, WORKER_REQUEST_ID));
+    }
+    if (
+      state !== WorkerRequestState.Failed &&
+      state !== WorkerRequestState.Cancelled
+    ) {
+      throw new Error(`worker request is not terminal: ${state}`);
+    }
+    const failure = Atomics.load(view, WORKER_REQUEST_FAILURE);
+    throw new Error(
+      `worker request failed: ${WorkerRequestFailure[failure as WorkerRequestFailure] ?? "Unknown"}`,
+    );
+  }
+
+  private block_wait_worker_request(requestView: Int32Array): WorkerRef {
+    const destroyView = new Int32Array(this.destroy_status);
+    for (;;) {
+      const state = Atomics.load(requestView, WORKER_REQUEST_STATE);
+      if (isWorkerRequestTerminal(state)) {
+        return this.read_worker_request(requestView);
+      }
+
+      const lifecycle = readLifecycle(destroyView);
+      if (lifecycle !== WorkerLifecycle.Running) {
+        if (state === WorkerRequestState.Pending) {
+          if (
+            completeWorkerRequest(
+              requestView,
+              WorkerRequestState.Cancelled,
+              WorkerRequestFailure.Destroyed,
+              0,
+              destroyView,
+            )
+          ) {
+            throw this.lifecycle_error(destroyView);
+          }
+          continue;
+        }
+      }
+
+      const epoch = Atomics.load(destroyView, DESTROY_WAKE_EPOCH);
+      if (
+        Atomics.load(requestView, WORKER_REQUEST_STATE) === state &&
+        readLifecycle(destroyView) === lifecycle &&
+        Atomics.load(destroyView, DESTROY_WAKE_EPOCH) === epoch
+      ) {
+        const result = Atomics.wait(destroyView, DESTROY_WAKE_EPOCH, epoch);
+        if (result === "timed-out") throw new Error("atomic wait timed out");
+      }
+    }
+  }
+
+  private async async_wait_worker_request(
+    requestView: Int32Array,
+  ): Promise<WorkerRef> {
+    const destroyView = new Int32Array(this.destroy_status);
+    for (;;) {
+      const state = Atomics.load(requestView, WORKER_REQUEST_STATE);
+      if (isWorkerRequestTerminal(state)) {
+        return this.read_worker_request(requestView);
+      }
+
+      const lifecycle = readLifecycle(destroyView);
+      if (
+        lifecycle !== WorkerLifecycle.Running &&
+        state === WorkerRequestState.Pending
+      ) {
+        if (
+          completeWorkerRequest(
+            requestView,
+            WorkerRequestState.Cancelled,
+            WorkerRequestFailure.Destroyed,
+            0,
+            destroyView,
+          )
+        ) {
+          throw this.lifecycle_error(destroyView);
+        }
+        continue;
+      }
+
+      const epoch = Atomics.load(destroyView, DESTROY_WAKE_EPOCH);
+      if (
+        Atomics.load(requestView, WORKER_REQUEST_STATE) === state &&
+        readLifecycle(destroyView) === lifecycle &&
+        Atomics.load(destroyView, DESTROY_WAKE_EPOCH) === epoch
+      ) {
+        const { value } = Atomics.waitAsync(
+          destroyView,
+          DESTROY_WAKE_EPOCH,
+          epoch,
+        );
+        const result = value instanceof Promise ? await value : value;
+        if (result === "timed-out") throw new Error("atomic wait timed out");
+      }
+    }
+  }
+
   /**
    * Requests the creation of a new worker thread.
    *
@@ -125,24 +328,48 @@ export class WorkerBackgroundRef {
     post_obj?: unknown,
   ): WorkerRef {
     console.log("new_worker", url, options, post_obj);
+    this.assert_running();
+    const request = this.block_allocate_worker_request();
+    let urlAllocation: Allocation | undefined;
+    let objectAllocation: Allocation | undefined;
+    let published = false;
+    try {
+      urlAllocation = this.block_allocate(new TextEncoder().encode(url));
+      objectAllocation = this.block_allocate(
+        new TextEncoder().encode(JSON.stringify(post_obj)),
+      );
 
-    this.block_lock_base_func();
-    const view = new Int32Array(this.signature_input);
-    Atomics.store(view, 0, 1);
-    const url_buffer = new TextEncoder().encode(url);
-    this.allocator.block_write(url_buffer, this.signature_input, 1);
-    Atomics.store(view, 3, options?.type === "module" ? 1 : 0);
-    const obj_json = JSON.stringify(post_obj);
-    const obj_buffer = new TextEncoder().encode(obj_json);
-    this.allocator.block_write(obj_buffer, this.signature_input, 4);
-    this.call_base_func();
-    this.block_wait_base_func();
+      this.block_lock_base_func();
+      try {
+        this.assert_running();
+        const view = new Int32Array(this.signature_input);
+        Atomics.store(view, 0, 1);
+        Atomics.store(view, 1, urlAllocation.ptr);
+        Atomics.store(view, 2, urlAllocation.len);
+        Atomics.store(view, 3, options?.type === "module" ? 1 : 0);
+        Atomics.store(view, 4, objectAllocation.ptr);
+        Atomics.store(view, 5, objectAllocation.len);
+        Atomics.store(view, SIGNATURE_REQUEST_STATUS_PTR, request.ptr);
+        Atomics.store(view, SIGNATURE_REQUEST_STATUS_LEN, request.len);
+        published = true;
+        this.call_base_func();
+        this.block_wait_base_func();
+      } finally {
+        this.release_base_func();
+      }
 
-    const id = Atomics.load(view, 0);
-
-    this.release_base_func();
-
-    return new WorkerRef(id);
+      return this.block_wait_worker_request(request.view);
+    } finally {
+      if (!published) {
+        if (urlAllocation !== undefined) {
+          this.allocator.free(urlAllocation.ptr, urlAllocation.len);
+        }
+        if (objectAllocation !== undefined) {
+          this.allocator.free(objectAllocation.ptr, objectAllocation.len);
+        }
+      }
+      this.allocator.free(request.allocationPtr, request.allocationLen);
+    }
   }
 
   async async_start_on_thread(
@@ -150,19 +377,48 @@ export class WorkerBackgroundRef {
     options: WorkerOptions | undefined,
     post_obj: unknown,
   ) {
-    await this.async_lock_base_func();
-    const view = new Int32Array(this.signature_input);
-    Atomics.store(view, 0, 2);
-    const url_buffer = new TextEncoder().encode(url);
-    await this.allocator.async_write(url_buffer, this.signature_input, 1);
-    Atomics.store(view, 3, options?.type === "module" ? 1 : 0);
-    const obj_json = JSON.stringify(post_obj);
-    const obj_buffer = new TextEncoder().encode(obj_json);
-    await this.allocator.async_write(obj_buffer, this.signature_input, 4);
-    this.call_base_func();
-    await this.async_wait_base_func();
+    this.assert_running();
+    const request = await this.async_allocate_worker_request();
+    let urlAllocation: Allocation | undefined;
+    let objectAllocation: Allocation | undefined;
+    let published = false;
+    try {
+      urlAllocation = await this.async_allocate(new TextEncoder().encode(url));
+      objectAllocation = await this.async_allocate(
+        new TextEncoder().encode(JSON.stringify(post_obj)),
+      );
 
-    this.release_base_func();
+      await this.async_lock_base_func();
+      try {
+        this.assert_running();
+        const view = new Int32Array(this.signature_input);
+        Atomics.store(view, 0, 2);
+        Atomics.store(view, 1, urlAllocation.ptr);
+        Atomics.store(view, 2, urlAllocation.len);
+        Atomics.store(view, 3, options?.type === "module" ? 1 : 0);
+        Atomics.store(view, 4, objectAllocation.ptr);
+        Atomics.store(view, 5, objectAllocation.len);
+        Atomics.store(view, SIGNATURE_REQUEST_STATUS_PTR, request.ptr);
+        Atomics.store(view, SIGNATURE_REQUEST_STATUS_LEN, request.len);
+        published = true;
+        this.call_base_func();
+        await this.async_wait_base_func();
+      } finally {
+        this.release_base_func();
+      }
+
+      await this.async_wait_worker_request(request.view);
+    } finally {
+      if (!published) {
+        if (urlAllocation !== undefined) {
+          this.allocator.free(urlAllocation.ptr, urlAllocation.len);
+        }
+        if (objectAllocation !== undefined) {
+          this.allocator.free(objectAllocation.ptr, objectAllocation.len);
+        }
+      }
+      this.allocator.free(request.allocationPtr, request.allocationLen);
+    }
   }
 
   block_start_on_thread(
@@ -170,19 +426,48 @@ export class WorkerBackgroundRef {
     options: WorkerOptions | undefined,
     post_obj: unknown,
   ) {
-    this.block_lock_base_func();
-    const view = new Int32Array(this.signature_input);
-    Atomics.store(view, 0, 2);
-    const url_buffer = new TextEncoder().encode(url);
-    this.allocator.block_write(url_buffer, this.signature_input, 1);
-    Atomics.store(view, 3, options?.type === "module" ? 1 : 0);
-    const obj_json = JSON.stringify(post_obj);
-    const obj_buffer = new TextEncoder().encode(obj_json);
-    this.allocator.block_write(obj_buffer, this.signature_input, 4);
-    this.call_base_func();
-    this.block_wait_base_func();
+    this.assert_running();
+    const request = this.block_allocate_worker_request();
+    let urlAllocation: Allocation | undefined;
+    let objectAllocation: Allocation | undefined;
+    let published = false;
+    try {
+      urlAllocation = this.block_allocate(new TextEncoder().encode(url));
+      objectAllocation = this.block_allocate(
+        new TextEncoder().encode(JSON.stringify(post_obj)),
+      );
 
-    this.release_base_func();
+      this.block_lock_base_func();
+      try {
+        this.assert_running();
+        const view = new Int32Array(this.signature_input);
+        Atomics.store(view, 0, 2);
+        Atomics.store(view, 1, urlAllocation.ptr);
+        Atomics.store(view, 2, urlAllocation.len);
+        Atomics.store(view, 3, options?.type === "module" ? 1 : 0);
+        Atomics.store(view, 4, objectAllocation.ptr);
+        Atomics.store(view, 5, objectAllocation.len);
+        Atomics.store(view, SIGNATURE_REQUEST_STATUS_PTR, request.ptr);
+        Atomics.store(view, SIGNATURE_REQUEST_STATUS_LEN, request.len);
+        published = true;
+        this.call_base_func();
+        this.block_wait_base_func();
+      } finally {
+        this.release_base_func();
+      }
+
+      this.block_wait_worker_request(request.view);
+    } finally {
+      if (!published) {
+        if (urlAllocation !== undefined) {
+          this.allocator.free(urlAllocation.ptr, urlAllocation.len);
+        }
+        if (objectAllocation !== undefined) {
+          this.allocator.free(objectAllocation.ptr, objectAllocation.len);
+        }
+      }
+      this.allocator.free(request.allocationPtr, request.allocationLen);
+    }
   }
 
   /**
@@ -202,145 +487,64 @@ export class WorkerBackgroundRef {
 
   done_notify(code: number): void {
     const notify_view = new Int32Array(this.lock, 12);
-
-    // notify done = code 2
-    const old = Atomics.compareExchange(notify_view, 0, 0, 2);
-
-    if (old !== 0) {
+    if (!claimRuntimeCompletion(notify_view)) {
       console.error("what happened?");
-
       return;
     }
-
     Atomics.store(notify_view, 1, code);
-
-    const num = Atomics.notify(notify_view, 0);
-
-    if (num === 0) {
-      Atomics.store(notify_view, 0, 0);
-    }
+    finishRuntimeCompletion(notify_view, RuntimeCompletion.Exit);
   }
 
   async async_wait_done_or_error(): Promise<number> {
     const notify_view = new Int32Array(this.lock, 12);
-
-    Atomics.store(notify_view, 0, 0);
-
-    let value: "timed-out" | "not-equal" | "ok";
-    const { value: _value } = Atomics.waitAsync(notify_view, 0, 0);
-    if (_value instanceof Promise) {
-      value = await _value;
-    } else {
-      value = _value;
-    }
-
-    if (value === "timed-out") {
-      throw new Error("timed-out");
-    }
-
-    const code = Atomics.load(notify_view, 0);
-
-    if (code === 3) {
-      const old = Atomics.compareExchange(notify_view, 0, 3, 0);
-
-      if (old !== 3) {
-        console.error("what happened?");
+    for (;;) {
+      const state = Atomics.load(notify_view, 0);
+      if (
+        state !== RuntimeCompletion.Waiting &&
+        state !== RuntimeCompletion.Completing
+      ) {
+        return this.read_runtime_completion(notify_view, state);
       }
-
-      return 0;
+      const { value } = Atomics.waitAsync(notify_view, 0, state);
+      const result = value instanceof Promise ? await value : value;
+      if (result === "timed-out") throw new Error("timed-out");
     }
-
-    if (code === 2) {
-      const old = Atomics.compareExchange(notify_view, 0, 2, 0);
-
-      const code = Atomics.load(notify_view, 1);
-
-      if (old !== 2) {
-        console.error("what happened?");
-      }
-
-      return code;
-    }
-
-    if (code !== 1) {
-      throw new Error("unknown code");
-    }
-
-    // get error
-    const ptr = Atomics.load(notify_view, 1);
-    const size = Atomics.load(notify_view, 2);
-    const error_buffer = this.allocator.get_memory(ptr, size);
-    const error_txt = new TextDecoder().decode(error_buffer);
-    const error_serialized = JSON.parse(
-      error_txt,
-    ) as Serializer.SerializedError;
-    const error = Serializer.deserialize(error_serialized);
-
-    const old = Atomics.compareExchange(notify_view, 0, 1, 0);
-
-    if (old !== 1) {
-      console.error("what happened?");
-    }
-
-    throw error;
   }
 
   block_wait_done_or_error(): number {
     const notify_view = new Int32Array(this.lock, 12);
-
-    Atomics.store(notify_view, 0, 0);
-
-    const value = Atomics.wait(notify_view, 0, 0);
-
-    if (value === "timed-out") {
-      throw new Error("timed-out");
-    }
-
-    const code = Atomics.load(notify_view, 0);
-
-    if (code === 3) {
-      const old = Atomics.compareExchange(notify_view, 0, 3, 0);
-
-      if (old !== 3) {
-        console.error("what happened?");
+    for (;;) {
+      const state = Atomics.load(notify_view, 0);
+      if (
+        state !== RuntimeCompletion.Waiting &&
+        state !== RuntimeCompletion.Completing
+      ) {
+        return this.read_runtime_completion(notify_view, state);
       }
+      const result = Atomics.wait(notify_view, 0, state);
+      if (result === "timed-out") throw new Error("timed-out");
+    }
+  }
 
-      return 0;
+  private read_runtime_completion(
+    notifyView: Int32Array,
+    state: number,
+  ): number {
+    if (state === RuntimeCompletion.Done) return 0;
+    if (state === RuntimeCompletion.Exit) return Atomics.load(notifyView, 1);
+    if (state === RuntimeCompletion.Cancelled) {
+      throw this.lifecycle_error(new Int32Array(this.destroy_status));
+    }
+    if (state !== RuntimeCompletion.Error) {
+      throw new Error(`unknown runtime completion state: ${state}`);
     }
 
-    if (code === 2) {
-      const old = Atomics.compareExchange(notify_view, 0, 2, 0);
-
-      const code = Atomics.load(notify_view, 1);
-
-      if (old !== 2) {
-        console.error("what happened?");
-      }
-
-      return code;
-    }
-
-    if (code !== 1) {
-      throw new Error("unknown code");
-    }
-
-    // get error
-    const ptr = Atomics.load(notify_view, 1);
-    const size = Atomics.load(notify_view, 2);
-    const error_buffer = this.allocator.get_memory(ptr, size);
-    const error_txt = new TextDecoder().decode(error_buffer);
-    const error_serialized = JSON.parse(
-      error_txt,
-    ) as Serializer.SerializedError;
-    const error = Serializer.deserialize(error_serialized);
-
-    const old = Atomics.compareExchange(notify_view, 0, 1, 0);
-
-    if (old !== 1) {
-      console.error("what happened?");
-    }
-
-    throw error;
+    const ptr = Atomics.load(notifyView, 1);
+    const size = Atomics.load(notifyView, 2);
+    const errorBuffer = this.allocator.get_memory(ptr, size);
+    const errorText = new TextDecoder().decode(errorBuffer);
+    const serialized = JSON.parse(errorText) as Serializer.SerializedError;
+    throw Serializer.deserialize(serialized);
   }
 
   terminate_all_workers(): void {

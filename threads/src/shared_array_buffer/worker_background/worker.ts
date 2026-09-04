@@ -1,36 +1,53 @@
 //// <reference types="@better-typescript-lib/webworker" />
 
-// If you create a worker and try to increase the number of threads,
-// you will have to use Atomics.wait because they need to be synchronized.
-// However, this is essentially impossible because Atomics.wait blocks the threads.
-// Therefore, a dedicated worker that creates a subworker (worker in worker) is prepared.
-// The request is made using BroadcastChannel.
+// A dedicated coordinator Worker creates subworkers because callers may be
+// blocked in Wasm and unable to use postMessage directly.
 
 import { AllocatorUseArrayBuffer } from "../allocator.js";
 import * as Serializer from "../serialize_error.js";
+import { readLifecycle, WorkerLifecycle } from "../worker_lifecycle.js";
+import {
+  claimRuntimeCompletion,
+  completeWorkerRequest,
+  createWorkerRequestView,
+  finishRuntimeCompletion,
+  RuntimeCompletion,
+  WorkerRequestFailure,
+  WorkerRequestState,
+} from "../worker_request.js";
+import {
+  SIGNATURE_REQUEST_STATUS_LEN,
+  SIGNATURE_REQUEST_STATUS_PTR,
+} from "./worker_export.js";
 import type { WorkerBackgroundRefObject } from "./worker_export.js";
 
-// Note that postMessage, etc.
-// cannot be used in a blocking environment such as during wasm execution.
-// (at least as far as I have tried)
+type WorkerRecord = {
+  worker: Worker;
+  request_view?: Int32Array;
+  worker_id: number;
+};
+
+type WorkerCommand = {
+  obj: Record<string, unknown>;
+  requestView: Int32Array;
+  url: string;
+};
+
+function asError(value: unknown): Error {
+  return value instanceof Error ? value : new Error(String(value));
+}
 
 class WorkerBackground<T> {
   private override_object: T;
   private allocator: AllocatorUseArrayBuffer;
-  // 0: lock
-  // 1: call
   private lock: SharedArrayBuffer;
   private signature_input: SharedArrayBuffer;
   private destroy_status: SharedArrayBuffer;
-
-  // worker_id starts from 1
-  private workers: Array<Worker | undefined> = [undefined];
-
-  // @ts-expect-error
+  private workers: Array<WorkerRecord | undefined> = [undefined];
+  // @ts-expect-error retained so the coordinator loop remains strongly held.
   private listen_holder: Promise<void>;
-
-  private start_worker?: Worker;
-  private animal_workers = new Map<number, Worker>();
+  private start_worker?: WorkerRecord;
+  private animal_workers = new Map<number, WorkerRecord>();
 
   constructor(
     override_object: T,
@@ -46,7 +63,6 @@ class WorkerBackground<T> {
       allocator ??
       new AllocatorUseArrayBuffer(new SharedArrayBuffer(10 * 1024));
     this.signature_input = signature_input ?? new SharedArrayBuffer(32);
-
     this.listen_holder = this.listen();
   }
 
@@ -63,17 +79,15 @@ class WorkerBackground<T> {
     );
   }
 
-  assign_worker_id(): number {
+  private assign_worker_id(): number {
     for (let i = 1; i < this.workers.length; i++) {
-      if (this.workers[i] === undefined) {
-        return i;
-      }
+      if (this.workers[i] === undefined) return i;
     }
     this.workers.push(undefined);
     return this.workers.length - 1;
   }
 
-  ref(): WorkerBackgroundRefObject {
+  private ref(): WorkerBackgroundRefObject {
     return {
       allocator: this.allocator.get_object(),
       lock: this.lock,
@@ -82,404 +96,454 @@ class WorkerBackground<T> {
     };
   }
 
-  destroy() {
-    let n = 0;
-    for (const worker of this.workers) {
-      if (worker !== undefined) {
-        worker.terminate();
-        console.debug(`terminate worker ${n}`);
+  private remove_record(record: WorkerRecord): void {
+    if (record.worker_id > 0 && this.workers[record.worker_id] === record) {
+      this.workers[record.worker_id] = undefined;
+    }
+    if (record.worker_id === 0 && this.start_worker === record) {
+      this.start_worker = undefined;
+    }
+    for (const [animalId, animalRecord] of this.animal_workers) {
+      if (animalRecord === record) this.animal_workers.delete(animalId);
+    }
+  }
+
+  private terminate_registered_workers(): void {
+    const records = new Set<WorkerRecord>();
+    for (const record of this.workers) {
+      if (record !== undefined) records.add(record);
+    }
+    if (this.start_worker !== undefined) records.add(this.start_worker);
+    const destroyView = new Int32Array(this.destroy_status);
+    for (const record of records) {
+      const requestView = record.request_view;
+      record.request_view = undefined;
+      if (requestView !== undefined) {
+        completeWorkerRequest(
+          requestView,
+          WorkerRequestState.Cancelled,
+          WorkerRequestFailure.Destroyed,
+          record.worker_id,
+          destroyView,
+        );
       }
-      n++;
+      record.worker.terminate();
     }
-
-    if (this.start_worker !== undefined) {
-      this.start_worker.terminate();
-      console.debug("terminate start worker");
-    }
-
+    this.workers = [undefined];
     this.start_worker = undefined;
     this.animal_workers.clear();
   }
 
-  async listen(): Promise<void> {
-    const lock_view = new Int32Array(this.lock);
-    Atomics.store(lock_view, 0, 0);
-    Atomics.store(lock_view, 1, 1);
+  private destroy(): void {
+    const completionView = new Int32Array(this.lock, 12);
+    if (claimRuntimeCompletion(completionView)) {
+      finishRuntimeCompletion(completionView, RuntimeCompletion.Cancelled);
+    }
+    this.terminate_registered_workers();
+  }
 
-    const signature_input_view = new Int32Array(this.signature_input);
+  private complete_request_ready(record: WorkerRecord): boolean {
+    const requestView = record.request_view;
+    record.request_view = undefined;
+    if (requestView === undefined) return false;
 
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      const { value } = Atomics.waitAsync(lock_view, 1, 1);
-      if ((await value) === "timed-out") {
-        throw new Error("timed-out");
+    const destroyView = new Int32Array(this.destroy_status);
+    const running = readLifecycle(destroyView) === WorkerLifecycle.Running;
+    const accepted = completeWorkerRequest(
+      requestView,
+      running ? WorkerRequestState.Ready : WorkerRequestState.Cancelled,
+      running ? WorkerRequestFailure.None : WorkerRequestFailure.Destroyed,
+      record.worker_id,
+      destroyView,
+    );
+    if (!accepted || !running) {
+      this.remove_record(record);
+      record.worker.terminate();
+      return false;
+    }
+    return true;
+  }
+
+  private complete_request_failure(
+    record: WorkerRecord,
+    failure: WorkerRequestFailure,
+  ): void {
+    const requestView = record.request_view;
+    record.request_view = undefined;
+    if (requestView !== undefined) {
+      completeWorkerRequest(
+        requestView,
+        WorkerRequestState.Failed,
+        failure,
+        record.worker_id,
+        new Int32Array(this.destroy_status),
+      );
+    }
+    this.remove_record(record);
+    record.worker.terminate();
+  }
+
+  private publish_runtime_exit(code: number): void {
+    const completionView = new Int32Array(this.lock, 12);
+    if (!claimRuntimeCompletion(completionView)) return;
+    Atomics.store(completionView, 1, code);
+    finishRuntimeCompletion(completionView, RuntimeCompletion.Exit);
+  }
+
+  private publish_runtime_done(): void {
+    const completionView = new Int32Array(this.lock, 12);
+    if (!claimRuntimeCompletion(completionView)) return;
+    finishRuntimeCompletion(completionView, RuntimeCompletion.Done);
+  }
+
+  private async publish_runtime_error(value: unknown): Promise<void> {
+    const completionView = new Int32Array(this.lock, 12);
+    if (!claimRuntimeCompletion(completionView)) return;
+    try {
+      const serialized = Serializer.serialize(asError(value));
+      await this.allocator.async_write(
+        new TextEncoder().encode(JSON.stringify(serialized)),
+        this.lock,
+        4,
+      );
+      finishRuntimeCompletion(completionView, RuntimeCompletion.Error);
+    } catch (error) {
+      finishRuntimeCompletion(completionView, RuntimeCompletion.Cancelled);
+      console.error(error);
+    }
+  }
+
+  private fail_current_runtime(error: unknown): void {
+    this.terminate_registered_workers();
+    void this.publish_runtime_error(error);
+  }
+
+  private take_allocation(pointer: number, length: number): ArrayBuffer {
+    const memoryLength = this.allocator.share_arrays_memory.byteLength;
+    if (
+      !Number.isInteger(pointer) ||
+      !Number.isInteger(length) ||
+      pointer < 0 ||
+      length < 0 ||
+      pointer > memoryLength - length
+    ) {
+      throw new RangeError("command allocation is outside shared memory");
+    }
+    try {
+      return this.allocator.get_memory(pointer, length);
+    } finally {
+      this.allocator.free(pointer, length);
+    }
+  }
+
+  private read_command(signatureView: Int32Array): WorkerCommand {
+    const requestPointer = Atomics.load(
+      signatureView,
+      SIGNATURE_REQUEST_STATUS_PTR,
+    );
+    const requestLength = Atomics.load(
+      signatureView,
+      SIGNATURE_REQUEST_STATUS_LEN,
+    );
+    let requestView: Int32Array | undefined;
+    let requestError: unknown;
+    try {
+      requestView = createWorkerRequestView(
+        this.allocator.share_arrays_memory,
+        requestPointer,
+        requestLength,
+      );
+    } catch (error) {
+      requestError = error;
+    }
+
+    let urlBuffer: ArrayBuffer | undefined;
+    let objectBuffer: ArrayBuffer | undefined;
+    let payloadError: unknown;
+    try {
+      urlBuffer = this.take_allocation(
+        Atomics.load(signatureView, 1),
+        Atomics.load(signatureView, 2),
+      );
+    } catch (error) {
+      payloadError = error;
+    }
+    try {
+      objectBuffer = this.take_allocation(
+        Atomics.load(signatureView, 4),
+        Atomics.load(signatureView, 5),
+      );
+    } catch (error) {
+      payloadError ??= error;
+    }
+
+    if (requestError !== undefined) throw requestError;
+    if (payloadError !== undefined) {
+      completeWorkerRequest(
+        requestView!,
+        WorkerRequestState.Failed,
+        WorkerRequestFailure.Protocol,
+        0,
+        new Int32Array(this.destroy_status),
+      );
+      throw payloadError;
+    }
+
+    const url = new TextDecoder().decode(urlBuffer!);
+    try {
+      return {
+        obj: JSON.parse(new TextDecoder().decode(objectBuffer!)) as Record<
+          string,
+          unknown
+        >,
+        requestView: requestView!,
+        url,
+      };
+    } catch (error) {
+      completeWorkerRequest(
+        requestView!,
+        WorkerRequestState.Failed,
+        WorkerRequestFailure.Protocol,
+        0,
+        new Int32Array(this.destroy_status),
+      );
+      throw error;
+    }
+  }
+
+  private register_handlers(record: WorkerRecord, isStart: boolean): void {
+    record.worker.onmessage = (event: MessageEvent) => {
+      const data = event.data;
+      if (data === null || typeof data !== "object") {
+        if (record.request_view !== undefined) {
+          this.complete_request_failure(record, WorkerRequestFailure.Protocol);
+        }
+        this.fail_current_runtime(new Error("invalid worker message"));
+        return;
       }
 
-      const gen_worker = () => {
-        const url_ptr = Atomics.load(signature_input_view, 1);
-        const url_len = Atomics.load(signature_input_view, 2);
-        const url_buff = this.allocator.get_memory(url_ptr, url_len);
-        this.allocator.free(url_ptr, url_len);
-        const url = new TextDecoder().decode(url_buff);
-        const is_module = Atomics.load(signature_input_view, 3) === 1;
-        return new Worker(url, {
-          type: is_module ? "module" : "classic",
-        });
+      const message = data as {
+        animal_id?: number;
+        code?: number;
+        error?: unknown;
+        msg?: string;
       };
-
-      // biome-ignore lint/complexity/noBannedTypes: <explanation>
-      const gen_obj = (): Object => {
-        const json_ptr = Atomics.load(signature_input_view, 4);
-        const json_len = Atomics.load(signature_input_view, 5);
-        const json_buff = this.allocator.get_memory(json_ptr, json_len);
-        this.allocator.free(json_ptr, json_len);
-        const json = new TextDecoder().decode(json_buff);
-        // biome-ignore lint/complexity/noBannedTypes: <explanation>
-        return JSON.parse(json) as Object;
-      };
-
-      const signature_input = Atomics.load(signature_input_view, 0);
-
-      switch (signature_input) {
-        // create new worker
-        case 1: {
-          const worker = gen_worker();
-          const obj = gen_obj();
-
-          const worker_id = this.assign_worker_id();
-
-          console.debug(`new worker ${worker_id}`);
-
-          this.workers[worker_id] = worker;
-
-          const { promise, resolve } = Promise.withResolvers<void>();
-
-          worker.onmessage = async (e) => {
-            const { msg, animal_id } = e.data;
-
-            if (msg === "ready") {
-              if (animal_id !== undefined) {
-                this.animal_workers.set(animal_id, worker);
-              }
-              resolve();
-            }
-
-            if (msg === "done") {
-              // biome-ignore lint/style/noNonNullAssertion: <explanation>
-              this.workers[worker_id]!.terminate();
-              this.workers[worker_id] = undefined;
-              if (animal_id !== undefined) {
-                this.animal_workers.delete(animal_id);
-              }
-
-              console.debug(`worker ${worker_id} done so terminate`);
-            }
-
-            if (msg === "error" || msg === "exit") {
-              this.workers[worker_id] = undefined;
-              if (animal_id !== undefined) {
-                this.animal_workers.delete(animal_id);
-              }
-
-              let n = 0;
-              for (const worker of this.workers) {
-                if (worker !== undefined) {
-                  worker.terminate();
-                  if (msg === "error") {
-                    console.warn(
-                      `wasi throw error but child process exists, terminate ${n}`,
-                    );
-                  } else {
-                    console.debug(
-                      `wasi exit but child process exists, terminate ${n}`,
-                    );
-                  }
-                }
-                n++;
-              }
-              if (this.start_worker !== undefined) {
-                this.start_worker.terminate();
-                if (msg === "error") {
-                  console.warn(
-                    "wasi throw error but wasi exists, terminate wasi",
-                  );
-                } else {
-                  console.debug("wasi exit but wasi exists, terminate wasi");
-                }
-              }
-
-              this.workers = [undefined];
-              this.start_worker = undefined;
-              this.animal_workers.clear();
-
-              const notify_view = new Int32Array(this.lock, 12);
-              if (msg === "error") {
-                const error = e.data.error;
-
-                const serialized_error = Serializer.serialize(error);
-
-                const [ptr, len] = await this.allocator.async_write(
-                  new TextEncoder().encode(JSON.stringify(serialized_error)),
-                  this.lock,
-                  4,
-                );
-
-                // notify error = code 1
-                if (Atomics.compareExchange(notify_view, 0, 0, 1) !== 0) {
-                  console.error("what happened?");
-
-                  this.allocator.free(ptr, len);
-
-                  return;
-                }
-
-                const num = Atomics.notify(notify_view, 0);
-
-                if (num !== 1) {
-                  console.error(error);
-
-                  this.allocator.free(ptr, len);
-
-                  Atomics.store(notify_view, 0, 0);
-                }
-              } else {
-                const code = e.data.code;
-
-                // notify exit = code 2
-                if (Atomics.compareExchange(notify_view, 0, 0, 2) !== 0) {
-                  console.error("what happened?");
-                  return;
-                }
-
-                Atomics.store(notify_view, 1, code);
-
-                const num = Atomics.notify(notify_view, 0);
-
-                if (num === 0) {
-                  Atomics.store(notify_view, 0, 0);
-                }
-              }
-            }
-          };
-
-          worker.postMessage({
-            ...this.override_object,
-            ...obj,
-            worker_id,
-            worker_background_ref: this.ref(),
-          });
-
-          await promise;
-
-          Atomics.store(signature_input_view, 0, worker_id);
-
-          break;
+      if (message.msg === "ready") {
+        if (!isStart && !this.complete_request_ready(record)) return;
+        const active = isStart
+          ? this.start_worker === record
+          : this.workers[record.worker_id] === record;
+        if (active && message.animal_id !== undefined) {
+          this.animal_workers.set(message.animal_id, record);
         }
-        // create start
-        case 2: {
-          console.debug("start worker create");
-
-          this.start_worker = gen_worker();
-          const obj = gen_obj();
-
-          this.start_worker.onmessage = async (e) => {
-            const { msg, animal_id } = e.data;
-
-            if (msg === "ready") {
-              if (animal_id !== undefined) {
-                this.animal_workers.set(animal_id, this.start_worker as Worker);
-              }
-            }
-
-            if (msg === "done") {
-              let n = 0;
-              for (const worker of this.workers) {
-                if (worker !== undefined) {
-                  worker.terminate();
-                  console.warn(`wasi done but worker exists, terminate ${n}`);
-                }
-                n++;
-              }
-
-              // biome-ignore lint/style/noNonNullAssertion: <explanation>
-              this.start_worker!.terminate();
-              this.start_worker = undefined;
-              if (animal_id !== undefined) {
-                this.animal_workers.delete(animal_id);
-              }
-
-              const notify_view = new Int32Array(this.lock, 12);
-
-              // notify done = code 3
-              Atomics.store(notify_view, 0, 3);
-              const num = Atomics.notify(notify_view, 0);
-
-              if (num === 0) {
-                Atomics.store(notify_view, 0, 0);
-              }
-
-              console.debug("start worker done so terminate");
-            }
-
-            if (msg === "error" || msg === "exit") {
-              let n = 0;
-              for (const worker of this.workers) {
-                if (worker !== undefined) {
-                  worker.terminate();
-                  if (msg === "error") {
-                    console.warn(
-                      `wasi throw error but worker exists, terminate ${n}`,
-                    );
-                  } else {
-                    console.debug(
-                      `wasi exit but worker exists, terminate ${n}`,
-                    );
-                  }
-                }
-                n++;
-              }
-              if (this.start_worker !== undefined) {
-                this.start_worker.terminate();
-                if (msg === "error") {
-                  console.warn(
-                    "wasi throw error but wasi exists, terminate start worker",
-                  );
-                } else {
-                  console.debug(
-                    "wasi exit but wasi exists, terminate start worker",
-                  );
-                }
-              }
-
-              this.workers = [undefined];
-              this.start_worker = undefined;
-              this.animal_workers.clear();
-
-              const notify_view = new Int32Array(this.lock, 12);
-              if (msg === "error") {
-                const error = e.data.error;
-
-                const serialized_error = Serializer.serialize(error);
-
-                const [ptr, len] = await this.allocator.async_write(
-                  new TextEncoder().encode(JSON.stringify(serialized_error)),
-                  this.lock,
-                  4,
-                );
-
-                // notify error = code 1
-                const old = Atomics.compareExchange(notify_view, 0, 0, 1);
-
-                if (old !== 0) {
-                  console.error("what happened?");
-
-                  this.allocator.free(ptr, len);
-
-                  return;
-                }
-
-                const num = Atomics.notify(notify_view, 0);
-
-                if (num === 0) {
-                  this.allocator.free(ptr, len);
-
-                  Atomics.store(notify_view, 0, 0);
-
-                  throw error;
-                }
-              } else {
-                const code = e.data.code;
-
-                // notify exit = code 2
-                const old = Atomics.compareExchange(notify_view, 0, 0, 2);
-                if (old !== 0) {
-                  console.error("what happened?");
-                  return;
-                }
-
-                Atomics.store(notify_view, 1, code);
-
-                const num = Atomics.notify(notify_view, 0);
-
-                if (num === 0) {
-                  Atomics.store(notify_view, 0, 0);
-                }
-              }
-            }
-          };
-
-          this.start_worker.postMessage({
-            ...this.override_object,
-            ...obj,
-            worker_background_ref: this.ref(),
-          });
-
-          break;
-        }
-        // terminate all workers
-        case 3: {
-          console.debug("terminate all workers");
-
-          let n = 0;
-          for (const worker of this.workers) {
-            if (worker !== undefined) {
-              worker.terminate();
-              console.debug(`terminate worker ${n}`);
-            }
-            n++;
-          }
-
-          if (this.start_worker !== undefined) {
-            this.start_worker.terminate();
-            console.debug("terminate start worker");
-          }
-
-          this.workers = [undefined];
-          this.start_worker = undefined;
-
-          break;
-        }
-        // kill animal with id
-        case 4: {
-          const animal_id = Atomics.load(signature_input_view, 1);
-          console.debug(`kill animal ${animal_id}`);
-
-          const worker = this.animal_workers.get(animal_id);
-          if (worker !== undefined) {
-            worker.postMessage({ msg: "kill_animal", animal_id });
-            this.animal_workers.delete(animal_id);
-          } else {
-            console.warn(`animal ${animal_id} not found`);
-          }
-
-          break;
-        }
-        // destroy
-        case 5: {
-          console.debug("destroy worker background");
-          this.destroy();
-          break;
-        }
+        return;
       }
 
-      Atomics.store(lock_view, 1, 1);
-      Atomics.store(lock_view, 2, 0);
-      const num = Atomics.notify(lock_view, 2, 1);
-      if (num === 0) {
-        console.warn("notify failed, waiter is late");
+      if (message.msg === "done") {
+        this.remove_record(record);
+        record.worker.terminate();
+        if (isStart) {
+          this.terminate_registered_workers();
+          this.publish_runtime_done();
+        }
+        return;
+      }
+
+      if (message.msg === "error" || message.msg === "exit") {
+        if (record.request_view !== undefined) {
+          this.complete_request_failure(
+            record,
+            WorkerRequestFailure.AnimalConstruction,
+          );
+        }
+        this.terminate_registered_workers();
+        if (message.msg === "error") {
+          void this.publish_runtime_error(
+            message.error ?? new Error("worker error"),
+          );
+        } else {
+          this.publish_runtime_exit(message.code ?? 1);
+        }
+      }
+    };
+
+    record.worker.onerror = (event) => {
+      event.preventDefault();
+      if (record.request_view !== undefined) {
+        this.complete_request_failure(record, WorkerRequestFailure.ScriptLoad);
+      }
+      this.fail_current_runtime(new Error(event.message));
+    };
+    record.worker.onmessageerror = () => {
+      if (record.request_view !== undefined) {
+        this.complete_request_failure(record, WorkerRequestFailure.Protocol);
+      }
+      this.fail_current_runtime(
+        new Error("worker message could not be decoded"),
+      );
+    };
+  }
+
+  private create_worker(signatureView: Int32Array): void {
+    let command: WorkerCommand;
+    try {
+      command = this.read_command(signatureView);
+    } catch (error) {
+      console.error(error);
+      return;
+    }
+
+    let worker: Worker;
+    try {
+      worker = new Worker(command.url, {
+        type: Atomics.load(signatureView, 3) === 1 ? "module" : "classic",
+      });
+    } catch (error) {
+      completeWorkerRequest(
+        command.requestView,
+        WorkerRequestState.Failed,
+        WorkerRequestFailure.ScriptLoad,
+        0,
+        new Int32Array(this.destroy_status),
+      );
+      this.fail_current_runtime(error);
+      return;
+    }
+
+    const workerId = this.assign_worker_id();
+    const record: WorkerRecord = {
+      worker,
+      request_view: command.requestView,
+      worker_id: workerId,
+    };
+    this.workers[workerId] = record;
+    this.register_handlers(record, false);
+    try {
+      worker.postMessage({
+        ...this.override_object,
+        ...command.obj,
+        worker_id: workerId,
+        worker_background_ref: this.ref(),
+      });
+    } catch (error) {
+      this.complete_request_failure(
+        record,
+        WorkerRequestFailure.AnimalConstruction,
+      );
+      this.fail_current_runtime(error);
+    }
+  }
+
+  private create_start_worker(signatureView: Int32Array): void {
+    let command: WorkerCommand;
+    try {
+      command = this.read_command(signatureView);
+    } catch (error) {
+      console.error(error);
+      return;
+    }
+
+    let worker: Worker;
+    try {
+      worker = new Worker(command.url, {
+        type: Atomics.load(signatureView, 3) === 1 ? "module" : "classic",
+      });
+    } catch (error) {
+      completeWorkerRequest(
+        command.requestView,
+        WorkerRequestState.Failed,
+        WorkerRequestFailure.ScriptLoad,
+        0,
+        new Int32Array(this.destroy_status),
+      );
+      this.fail_current_runtime(error);
+      return;
+    }
+
+    const record: WorkerRecord = {
+      worker,
+      request_view: command.requestView,
+      worker_id: 0,
+    };
+    this.start_worker = record;
+    this.register_handlers(record, true);
+    try {
+      worker.postMessage({
+        ...this.override_object,
+        ...command.obj,
+        worker_background_ref: this.ref(),
+      });
+    } catch (error) {
+      this.complete_request_failure(
+        record,
+        WorkerRequestFailure.WasmInstantiation,
+      );
+      this.fail_current_runtime(error);
+      return;
+    }
+    this.complete_request_ready(record);
+  }
+
+  private async listen(): Promise<void> {
+    const lockView = new Int32Array(this.lock);
+    const signatureView = new Int32Array(this.signature_input);
+    Atomics.store(lockView, 0, 0);
+    Atomics.store(lockView, 1, 1);
+
+    for (;;) {
+      const { value } = Atomics.waitAsync(lockView, 1, 1);
+      const result = value instanceof Promise ? await value : value;
+      if (result === "timed-out") throw new Error("timed-out");
+
+      try {
+        switch (Atomics.load(signatureView, 0)) {
+          case 1:
+            this.create_worker(signatureView);
+            break;
+          case 2:
+            this.create_start_worker(signatureView);
+            break;
+          case 3:
+            this.terminate_registered_workers();
+            break;
+          case 4: {
+            const animalId = Atomics.load(signatureView, 1);
+            const record = this.animal_workers.get(animalId);
+            if (record !== undefined) {
+              record.worker.postMessage({
+                msg: "kill_animal",
+                animal_id: animalId,
+              });
+              if (this.animal_workers.get(animalId) === record) {
+                this.animal_workers.delete(animalId);
+              }
+            }
+            break;
+          }
+          case 5:
+            this.destroy();
+            break;
+        }
+      } catch (error) {
+        console.error(error);
+      } finally {
+        Atomics.store(lockView, 1, 1);
+        Atomics.store(lockView, 2, 0);
+        Atomics.notify(lockView, 2, 1);
       }
     }
   }
 }
 
-// biome-ignore lint:complexity/noUnusedVariables: <explanation>
+// biome-ignore lint/complexity/noUnusedVariables: keeps the coordinator alive.
 let worker_background: WorkerBackground<unknown>;
 
-globalThis.onmessage = (e: MessageEvent) => {
-  const { override_object, worker_background_ref_object } = e.data;
+globalThis.onmessage = (event: MessageEvent) => {
+  const { override_object, worker_background_ref_object } = event.data;
   worker_background = WorkerBackground.init_self(
     override_object,
     worker_background_ref_object,
   );
+  void worker_background;
   postMessage("ready");
 };
