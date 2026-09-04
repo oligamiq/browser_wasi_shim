@@ -9,10 +9,15 @@ import { WASIFarm } from "./farm.ts";
 import { WASIFarmRef } from "./ref.ts";
 import type { WASIFarmRefObject } from "./ref.ts";
 import { DestroyerHandle } from "./destroyer_handle.ts";
+export type { DestroyerHandleObject } from "./destroyer_handle.ts";
 export {
   BaseCallCapacityError,
   thread_spawn_on_worker,
 } from "./shared_array_buffer/index.ts";
+export {
+  WorkerDestroyError,
+  WorkerDestroyFailureCode,
+} from "./shared_array_buffer/worker_lifecycle.ts";
 export {
   WASIFarm,
   WASIFarmRef,

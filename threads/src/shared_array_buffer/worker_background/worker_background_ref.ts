@@ -107,6 +107,10 @@ export class WorkerBackgroundRef {
     };
   }
 
+  notify_destroy(): void {
+    Atomics.notify(new Int32Array(this.lock), 1);
+  }
+
   /**
    * Requests the creation of a new worker thread.
    *

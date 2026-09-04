@@ -1,95 +1,89 @@
-import type { WorkerBackgroundRef } from "./shared_array_buffer/worker_background";
+import {
+  WorkerBackgroundRef,
+  type WorkerBackgroundRefObject,
+} from "./shared_array_buffer/worker_background/index.ts";
+import {
+  beginDestroy,
+  markRequesterClosing,
+  readRequesterAnimalId,
+  waitForDestroyTerminal,
+  waitForRequesterDrained,
+} from "./shared_array_buffer/worker_lifecycle.ts";
 
-/**
- * Represents the serialized state of a DestroyerHandle for thread transfer.
- */
+/** Represents the serialized state of a DestroyerHandle for thread transfer. */
 export interface DestroyerHandleObject {
-  sender: WorkerBackgroundRef;
+  sender: WorkerBackgroundRefObject;
   destroy_status: SharedArrayBuffer;
 }
 
-/**
- * DestroyerHandle provides a thread-safe mechanism to signal and listen for
- * the destruction of a WASI environment and its associated workers.
- */
+/** Coordinates destruction through a shared worker lifecycle capability. */
 export class DestroyerHandle {
-  private sender: WorkerBackgroundRef;
-  private destroy_status: SharedArrayBuffer;
-  // biome-ignore lint/correctness/noUnusedPrivateClassMembers: <explanation>
-  private listen_holder: Promise<void>;
+  private requester_shutdown?: Promise<void>;
 
-  /**
-   * Initializes a new DestroyerHandle.
-   *
-   * @param sender The reference to the background worker coordinator.
-   * @param destroy_status Shared memory buffer tracking the destruction status.
-   */
-  constructor(sender: WorkerBackgroundRef, destroy_status: SharedArrayBuffer) {
-    this.sender = sender;
-    this.destroy_status = destroy_status;
-    this.listen_holder = this.listen();
+  constructor(
+    private readonly sender: WorkerBackgroundRef,
+    private readonly destroy_status: SharedArrayBuffer,
+    private readonly requester_animal_id?: number,
+  ) {}
+
+  static init_self(obj: DestroyerHandleObject): DestroyerHandle {
+    return new DestroyerHandle(
+      WorkerBackgroundRef.init_self(obj.sender),
+      obj.destroy_status,
+    );
   }
 
-  /**
-   * Reconstructs a handle from a transferred object.
-   *
-   * @param obj The serialized handle state.
-   * @returns A new DestroyerHandle instance.
-   */
-  static init_self(obj: DestroyerHandleObject): DestroyerHandle {
-    return new DestroyerHandle(obj.sender, obj.destroy_status);
+  static init_bound(
+    obj: DestroyerHandleObject,
+    requesterAnimalId: number,
+  ): DestroyerHandle {
+    return new DestroyerHandle(
+      WorkerBackgroundRef.init_self(obj.sender),
+      obj.destroy_status,
+      requesterAnimalId,
+    );
   }
 
   get_object(): DestroyerHandleObject {
     return {
+      sender: this.sender.get_object(),
       destroy_status: this.destroy_status,
-      sender: this.sender,
     };
   }
 
-  /**
-   * Listens for the destruction signal asynchronously.
-   *
-   * When the signal is received, it triggers cleanup of the handle.
-   */
-  async listen(): Promise<void> {
-    const view = new Int32Array(this.destroy_status);
-    // idx=0: lock flag (0-based indexing)
-    const { value } = Atomics.waitAsync(view, 0, 1);
-    if ((await value) === "timed-out") {
-      throw new Error("destroy listen timed out");
-    }
-
-    // Cleanup after receiving notification
-    this.cleanup();
-  }
-
-  private cleanup(): void {
-    // Release all references to allow garbage collection
-    // biome-ignore lint: suspicious/noUnnecessaryTypeAssertion: <explanation>
-    this.destroy_status = null as unknown as SharedArrayBuffer;
-    // biome-ignore lint: suspicious/noUnnecessaryTypeAssertion: <explanation>
-    this.sender = null as unknown as WorkerBackgroundRef;
-  }
-
-  /**
-   * Synchronously signals destruction through this handle's worker coordinator.
-   *
-   * It updates shared status and notifies listeners after requesting owned
-   * worker cleanup. It does not destroy a WASIFarm, Park, or Animal directly.
-   * The existing handle lifecycle requires callers not to reuse a handle after
-   * its asynchronous listener has released the transferred resources.
-   */
   destroy(): void {
     const view = new Int32Array(this.destroy_status);
-    // Acquire lock at idx=0 (user's idx=1)
-    Atomics.store(view, 0, 1);
-    // Set notification flag at idx=1 (user's idx=2)
-    Atomics.store(view, 1, 1);
-    this.sender.destroy();
+    if (beginDestroy(view, this.requester_animal_id)) {
+      this.sender.notify_destroy();
+      if (this.requester_animal_id !== undefined) {
+        void this.schedule_requester_shutdown(view).catch(() => undefined);
+      }
+    }
+  }
 
-    // Signal completion after destroy completes
-    Atomics.store(view, 0, 0);
-    Atomics.notify(view, 0);
+  async async_destroy(): Promise<void> {
+    const view = new Int32Array(this.destroy_status);
+    const won = beginDestroy(view, this.requester_animal_id);
+    if (won) this.sender.notify_destroy();
+    const isElectedRequester =
+      this.requester_animal_id !== undefined &&
+      readRequesterAnimalId(view) === this.requester_animal_id;
+    if (isElectedRequester) {
+      await this.schedule_requester_shutdown(view);
+      return;
+    }
+    await waitForDestroyTerminal(view);
+  }
+
+  private schedule_requester_shutdown(view: Int32Array): Promise<void> {
+    this.requester_shutdown ??= (async () => {
+      await waitForRequesterDrained(view);
+      setTimeout(() => {
+        markRequesterClosing(view);
+        const close = Reflect.get(globalThis, "close");
+        if (typeof close === "function") close.call(globalThis);
+      }, 0);
+    })();
+    return this.requester_shutdown;
   }
 }
