@@ -210,6 +210,9 @@ export class ThreadSpawner {
           reject(failure);
         }
         beginDestroy(destroyView);
+        void this.worker_background_ref
+          .cancel_pending_command()
+          .catch((commandError) => console.error(commandError));
         markDestroyFailed(destroyView, code);
         this.start_destroy_finalization();
       };

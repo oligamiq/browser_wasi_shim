@@ -10,6 +10,8 @@ import {
 } from "../worker_lifecycle.ts";
 import {
   claimRuntimeCompletion,
+  completeWorkerRequest,
+  createWorkerRequestView,
   finishRuntimeCompletion,
   readWorkerRequestWaitSnapshot,
   RuntimeCompletion,
@@ -24,6 +26,7 @@ import {
 import {
   SIGNATURE_REQUEST_STATUS_LEN,
   SIGNATURE_REQUEST_STATUS_PTR,
+  WorkerCommandState,
 } from "./worker_export.ts";
 import type {
   WorkerBackgroundRefObject,
@@ -83,6 +86,8 @@ export class WorkerBackgroundRef {
       }
       const old = Atomics.compareExchange(view, 0, 0, 1);
       if (old === 0) {
+        Atomics.store(view, 1, WorkerCommandState.Preparing);
+        Atomics.notify(view, 1);
         return;
       }
     }
@@ -98,6 +103,8 @@ export class WorkerBackgroundRef {
       }
       const old = Atomics.compareExchange(view, 0, 0, 1);
       if (old === 0) {
+        Atomics.store(view, 1, WorkerCommandState.Preparing);
+        Atomics.notify(view, 1);
         return;
       }
     }
@@ -106,7 +113,7 @@ export class WorkerBackgroundRef {
   private call_base_func(): void {
     const view = new Int32Array(this.lock);
     Atomics.store(view, 2, 1);
-    Atomics.store(view, 1, 0);
+    Atomics.store(view, 1, WorkerCommandState.Published);
     Atomics.notify(view, 1, 1);
   }
 
@@ -130,8 +137,26 @@ export class WorkerBackgroundRef {
   // release base_func
   private release_base_func(): void {
     const view = new Int32Array(this.lock);
+    if (
+      Atomics.compareExchange(
+        view,
+        1,
+        WorkerCommandState.Preparing,
+        WorkerCommandState.Idle,
+      ) === WorkerCommandState.Preparing
+    ) {
+      Atomics.notify(view, 1);
+    }
     Atomics.store(view, 0, 0);
     Atomics.notify(view, 0, 1);
+  }
+
+  private encode_post_object(postObj: unknown): Uint8Array {
+    const serialized = JSON.stringify(postObj === undefined ? {} : postObj);
+    if (serialized === undefined) {
+      throw new TypeError("worker post data must be JSON serializable");
+    }
+    return new TextEncoder().encode(serialized);
   }
 
   get_object(): WorkerBackgroundRefObject {
@@ -317,9 +342,7 @@ export class WorkerBackgroundRef {
     let published = false;
     try {
       urlAllocation = this.block_allocate(new TextEncoder().encode(url));
-      objectAllocation = this.block_allocate(
-        new TextEncoder().encode(JSON.stringify(post_obj)),
-      );
+      objectAllocation = this.block_allocate(this.encode_post_object(post_obj));
 
       this.block_lock_base_func();
       try {
@@ -367,7 +390,7 @@ export class WorkerBackgroundRef {
     try {
       urlAllocation = await this.async_allocate(new TextEncoder().encode(url));
       objectAllocation = await this.async_allocate(
-        new TextEncoder().encode(JSON.stringify(post_obj)),
+        this.encode_post_object(post_obj),
       );
 
       await this.async_lock_base_func();
@@ -415,9 +438,7 @@ export class WorkerBackgroundRef {
     let published = false;
     try {
       urlAllocation = this.block_allocate(new TextEncoder().encode(url));
-      objectAllocation = this.block_allocate(
-        new TextEncoder().encode(JSON.stringify(post_obj)),
-      );
+      objectAllocation = this.block_allocate(this.encode_post_object(post_obj));
 
       this.block_lock_base_func();
       try {
@@ -518,34 +539,137 @@ export class WorkerBackgroundRef {
       throw this.lifecycle_error(new Int32Array(this.destroy_status));
     }
     if (state !== RuntimeCompletion.Error) {
+      if (state === RuntimeCompletion.ErrorConsumed) {
+        throw new Error("runtime error payload was already consumed");
+      }
       throw new Error(`unknown runtime completion state: ${state}`);
     }
 
-    const ptr = Atomics.load(notifyView, 1);
-    const size = Atomics.load(notifyView, 2);
-    const errorBuffer = this.allocator.take_memory(ptr, size);
-    const errorText = new TextDecoder().decode(errorBuffer);
-    const serialized = JSON.parse(errorText) as Serializer.SerializedError;
-    throw Serializer.deserialize(serialized);
+    if (
+      Atomics.compareExchange(
+        notifyView,
+        0,
+        RuntimeCompletion.Error,
+        RuntimeCompletion.Completing,
+      ) !== RuntimeCompletion.Error
+    ) {
+      return this.read_runtime_completion(
+        notifyView,
+        Atomics.load(notifyView, 0),
+      );
+    }
+
+    try {
+      const ptr = Atomics.load(notifyView, 1);
+      const size = Atomics.load(notifyView, 2);
+      const errorBuffer = this.allocator.take_memory(ptr, size);
+      const errorText = new TextDecoder().decode(errorBuffer);
+      const serialized = JSON.parse(errorText) as Serializer.SerializedError;
+      throw Serializer.deserialize(serialized);
+    } finally {
+      Atomics.store(notifyView, 0, RuntimeCompletion.ErrorConsumed);
+      Atomics.notify(notifyView, 0);
+    }
+  }
+
+  private cancel_claimed_command(): void {
+    const signatureView = new Int32Array(this.signature_input);
+    const opcode = Atomics.load(signatureView, 0);
+    if (opcode !== 1 && opcode !== 2) return;
+
+    const requestView = createWorkerRequestView(
+      this.allocator.share_arrays_memory,
+      Atomics.load(signatureView, SIGNATURE_REQUEST_STATUS_PTR),
+      Atomics.load(signatureView, SIGNATURE_REQUEST_STATUS_LEN),
+    );
+    this.allocator.take_memory(
+      Atomics.load(signatureView, 1),
+      Atomics.load(signatureView, 2),
+    );
+    this.allocator.take_memory(
+      Atomics.load(signatureView, 4),
+      Atomics.load(signatureView, 5),
+    );
+    completeWorkerRequest(
+      requestView,
+      WorkerRequestState.Cancelled,
+      WorkerRequestFailure.Destroyed,
+      0,
+      new Int32Array(this.destroy_status),
+    );
+  }
+
+  async cancel_pending_command(): Promise<void> {
+    const lockView = new Int32Array(this.lock);
+    for (;;) {
+      const state = Atomics.load(lockView, 1);
+      if (
+        state === WorkerCommandState.Idle &&
+        Atomics.load(lockView, 0) === 0
+      ) {
+        return;
+      }
+      if (state === WorkerCommandState.Published) {
+        if (
+          Atomics.compareExchange(
+            lockView,
+            1,
+            WorkerCommandState.Published,
+            WorkerCommandState.Claimed,
+          ) !== WorkerCommandState.Published
+        ) {
+          continue;
+        }
+        try {
+          this.cancel_claimed_command();
+        } finally {
+          Atomics.store(lockView, 1, WorkerCommandState.Idle);
+          Atomics.store(lockView, 2, 0);
+          Atomics.notify(lockView, 1);
+          Atomics.notify(lockView, 2, 1);
+        }
+        return;
+      }
+      if (
+        state !== WorkerCommandState.Idle &&
+        state !== WorkerCommandState.Preparing &&
+        state !== WorkerCommandState.Claimed
+      ) {
+        throw new Error(`unknown worker command state: ${state}`);
+      }
+      const { value } = Atomics.waitAsync(lockView, 1, state);
+      const result = value instanceof Promise ? await value : value;
+      if (result === "timed-out") throw new Error("timed-out");
+    }
   }
 
   terminate_all_workers(): void {
+    this.assert_running();
     this.block_lock_base_func();
-    const view = new Int32Array(this.signature_input);
-    Atomics.store(view, 0, 3);
-    this.call_base_func();
-    this.block_wait_base_func();
-    this.release_base_func();
+    try {
+      this.assert_running();
+      const view = new Int32Array(this.signature_input);
+      Atomics.store(view, 0, 3);
+      this.call_base_func();
+      this.block_wait_base_func();
+    } finally {
+      this.release_base_func();
+    }
   }
 
   kill_animal(id: number): void {
+    this.assert_running();
     this.block_lock_base_func();
-    const view = new Int32Array(this.signature_input);
-    Atomics.store(view, 0, 4);
-    Atomics.store(view, 1, id);
-    this.call_base_func();
-    this.block_wait_base_func();
-    this.release_base_func();
+    try {
+      this.assert_running();
+      const view = new Int32Array(this.signature_input);
+      Atomics.store(view, 0, 4);
+      Atomics.store(view, 1, id);
+      this.call_base_func();
+      this.block_wait_base_func();
+    } finally {
+      this.release_base_func();
+    }
   }
 }
 

@@ -5,6 +5,7 @@ import { AllocatorUseArrayBuffer } from "./allocator.ts";
 import { ThreadSpawner } from "./thread_spawn.ts";
 import { WorkerBackground } from "./worker_background/worker.ts";
 import { WorkerBackgroundRef } from "./worker_background/worker_background_ref.ts";
+import type { WorkerBackgroundRefObject } from "./worker_background/worker_export.ts";
 import { WorkerBackgroundRefObjectConstructor } from "./worker_background/worker_export.ts";
 import {
   beginDestroy,
@@ -12,7 +13,6 @@ import {
   DESTROY_FAILURE_CODE,
   DESTROY_REQUESTER_STATUS,
   DESTROY_WAKE_EPOCH,
-  markDestroyed,
   readLifecycle,
   RequesterStatus,
   waitForDestroyTerminal,
@@ -21,6 +21,8 @@ import {
   WorkerLifecycle,
 } from "./worker_lifecycle.ts";
 import {
+  completeWorkerRequest,
+  createWorkerRequestView,
   RuntimeCompletion,
   WORKER_REQUEST_BYTES,
   WORKER_REQUEST_FAILURE,
@@ -331,20 +333,131 @@ describe("ThreadSpawner coordinator ownership", () => {
     assert.strictEqual(error.code, WorkerDestroyFailureCode.CoordinatorRuntime);
   });
 
-  test("intentional coordinator termination remains Destroyed and occurs once", async () => {
+  test("coordinator errors remain fatal after destroy starts", async () => {
     installFakeWorker();
     FakeWorker.onPostMessage = (worker) => worker.emitMessage("ready");
-    FakeWorker.onTerminate = (worker) => worker.emitError("terminated");
     const spawner = createTestThreadSpawner("fake:coordinator");
     await spawner.wait_worker_background_worker();
-    const destroyView = new Int32Array(spawner.get_object().destroy_status);
 
     spawner.destroy();
-    markDestroyed(destroyView);
-    await Promise.all([spawner.async_destroy(), spawner.async_destroy()]);
+    FakeWorker.instances[0]?.emitError("failed during teardown");
 
-    assert.strictEqual(readLifecycle(destroyView), WorkerLifecycle.Destroyed);
-    assert.strictEqual(FakeWorker.instances[0]?.terminateCount, 1);
+    const error = await captureDestroyError(spawner.async_destroy());
+    assert.strictEqual(error.code, WorkerDestroyFailureCode.CoordinatorRuntime);
+  });
+
+  test("genuine teardown detaches and terminates the coordinator once", async () => {
+    const spawner = createTestThreadSpawner(REAL_COORDINATOR_URL);
+    try {
+      await withTimeout(
+        spawner.wait_worker_background_worker(),
+        "coordinator readiness",
+      );
+      const coordinator = (
+        spawner as unknown as { worker_background_worker?: Worker }
+      ).worker_background_worker;
+      assert.ok(coordinator !== undefined);
+      const terminate = coordinator.terminate.bind(coordinator);
+      let terminateCount = 0;
+      coordinator.terminate = () => {
+        assert.strictEqual(coordinator.onmessage, null);
+        assert.strictEqual(coordinator.onerror, null);
+        assert.strictEqual(coordinator.onmessageerror, null);
+        terminateCount += 1;
+        terminate();
+      };
+
+      spawner.destroy();
+      await Promise.all([spawner.async_destroy(), spawner.async_destroy()]);
+
+      assert.strictEqual(
+        readLifecycle(new Int32Array(spawner.get_object().destroy_status)),
+        WorkerLifecycle.Destroyed,
+      );
+      assert.strictEqual(terminateCount, 1);
+    } finally {
+      await cleanupSpawner(spawner);
+    }
+  });
+
+  test("bootstrap failure acknowledges a command published before ready", async () => {
+    installFakeWorker();
+    const spawner = createTestThreadSpawner("fake:coordinator");
+    const internals = spawner as unknown as {
+      worker_background_ref: WorkerBackgroundRef;
+      worker_background_ref_object: { lock: SharedArrayBuffer };
+    };
+    const operation = internals.worker_background_ref.async_start_on_thread(
+      "fake:child",
+      { type: "module" },
+      {},
+    );
+    const lockView = new Int32Array(
+      internals.worker_background_ref_object.lock,
+    );
+    await waitFor(
+      () => Atomics.load(lockView, 1) === 0,
+      "pre-ready command publication",
+    );
+
+    FakeWorker.instances[0]?.emitError("bootstrap failed with pending command");
+
+    await assert.rejects(
+      withTimeout(operation, "pre-ready command acknowledgement"),
+      /Destroyed/,
+    );
+    const readinessError = await captureDestroyError(
+      spawner.wait_worker_background_worker(),
+    );
+    assert.strictEqual(
+      readinessError.code,
+      WorkerDestroyFailureCode.CoordinatorBootstrap,
+    );
+    assert.strictEqual(Atomics.load(lockView, 2), 0);
+  });
+
+  test("synchronous operations do not require coordinator readiness", () => {
+    installFakeWorker();
+    const spawner = createTestThreadSpawner("fake:coordinator");
+    const internals = spawner as unknown as {
+      worker_background_ref: WorkerBackgroundRef;
+      worker_background_ref_object: WorkerBackgroundRefObject;
+    };
+    const allocator = AllocatorUseArrayBuffer.init_self(
+      internals.worker_background_ref_object.allocator,
+    );
+    const signatureView = new Int32Array(
+      internals.worker_background_ref_object.signature_input,
+    );
+    const refInternals = internals.worker_background_ref as unknown as {
+      block_wait_base_func: () => void;
+      call_base_func: () => void;
+    };
+    refInternals.call_base_func = () => {
+      const requestView = createWorkerRequestView(
+        allocator.share_arrays_memory,
+        Atomics.load(signatureView, 6),
+        Atomics.load(signatureView, 7),
+      );
+      allocator.take_memory(
+        Atomics.load(signatureView, 1),
+        Atomics.load(signatureView, 2),
+      );
+      allocator.take_memory(
+        Atomics.load(signatureView, 4),
+        Atomics.load(signatureView, 5),
+      );
+      completeWorkerRequest(
+        requestView,
+        WorkerRequestState.Ready,
+        WorkerRequestFailure.None,
+        41,
+        new Int32Array(spawner.get_object().destroy_status),
+      );
+    };
+    refInternals.block_wait_base_func = () => undefined;
+
+    assert.strictEqual(spawner.thread_spawn(0, [], [], []), 41);
   });
 
   test("non-owner signatures retain requester plumbing", () => {
@@ -360,6 +473,164 @@ describe("ThreadSpawner coordinator ownership", () => {
 });
 
 describe("WorkerBackground teardown races", () => {
+  test("command preparation closes the mutex-to-publication teardown gap", () => {
+    const destroyStatus = createDestroyStatus();
+    const reference = WorkerBackgroundRefObjectConstructor(destroyStatus);
+    const workerRef = WorkerBackgroundRef.init_self(reference);
+    const allocatorView = new Int32Array(
+      reference.allocator.share_arrays_memory,
+    );
+    const lockView = new Int32Array(reference.lock);
+    const destroyView = new Int32Array(destroyStatus);
+    const internals = workerRef as unknown as {
+      block_lock_base_func: () => void;
+    };
+    const acquire = internals.block_lock_base_func.bind(workerRef);
+    let stateAfterAcquisition = -1;
+    internals.block_lock_base_func = () => {
+      acquire();
+      stateAfterAcquisition = Atomics.load(lockView, 1);
+      beginDestroy(destroyView);
+    };
+
+    assert.throws(
+      () => workerRef.new_worker("fake:child", { type: "module" }, {}),
+      WorkerDestroyError,
+    );
+    assert.strictEqual(stateAfterAcquisition, 2);
+    assert.strictEqual(Atomics.load(lockView, 1), 1);
+    assert.strictEqual(Atomics.load(lockView, 0), 0);
+    assert.strictEqual(Atomics.load(allocatorView, 1), 0);
+  });
+
+  test("teardown waits for command preparation to finish", async () => {
+    installFakeWorker();
+    const destroyStatus = createDestroyStatus();
+    const reference = WorkerBackgroundRefObjectConstructor(destroyStatus);
+    const destroyView = new Int32Array(destroyStatus);
+    const lockView = new Int32Array(reference.lock);
+    Atomics.store(lockView, 1, 2);
+    beginDestroy(destroyView);
+
+    new WorkerBackground(
+      {},
+      destroyStatus,
+      reference.lock,
+      AllocatorUseArrayBuffer.init_self(reference.allocator),
+      reference.signature_input,
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.strictEqual(readLifecycle(destroyView), WorkerLifecycle.Destroying);
+
+    Atomics.store(lockView, 1, 1);
+    Atomics.notify(lockView, 1);
+    await withTimeout(
+      waitForDestroyTerminal(destroyView),
+      "preparation-aware teardown",
+    );
+    assert.strictEqual(readLifecycle(destroyView), WorkerLifecycle.Destroyed);
+  });
+
+  test("teardown waits when mutex acquisition precedes Preparing", async () => {
+    installFakeWorker();
+    const destroyStatus = createDestroyStatus();
+    const reference = WorkerBackgroundRefObjectConstructor(destroyStatus);
+    const destroyView = new Int32Array(destroyStatus);
+    const lockView = new Int32Array(reference.lock);
+    Atomics.store(lockView, 0, 1);
+    beginDestroy(destroyView);
+
+    new WorkerBackground(
+      {},
+      destroyStatus,
+      reference.lock,
+      AllocatorUseArrayBuffer.init_self(reference.allocator),
+      reference.signature_input,
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.strictEqual(readLifecycle(destroyView), WorkerLifecycle.Destroying);
+
+    Atomics.store(lockView, 1, 2);
+    Atomics.notify(lockView, 1);
+    Atomics.store(lockView, 1, 1);
+    Atomics.store(lockView, 0, 0);
+    Atomics.notify(lockView, 1);
+    Atomics.notify(lockView, 0);
+    await withTimeout(
+      waitForDestroyTerminal(destroyView),
+      "mutex-acquisition-aware teardown",
+    );
+    assert.strictEqual(readLifecycle(destroyView), WorkerLifecycle.Destroyed);
+  });
+
+  test("omitted worker post data is published as valid JSON", () => {
+    const destroyStatus = createDestroyStatus();
+    const reference = WorkerBackgroundRefObjectConstructor(destroyStatus);
+    const allocator = AllocatorUseArrayBuffer.init_self(reference.allocator);
+    const workerRef = WorkerBackgroundRef.init_self(reference);
+    const signatureView = new Int32Array(reference.signature_input);
+    const internals = workerRef as unknown as {
+      block_wait_base_func: () => void;
+      call_base_func: () => void;
+    };
+    let objectText: string | undefined;
+    internals.call_base_func = () => {
+      const requestView = createWorkerRequestView(
+        allocator.share_arrays_memory,
+        Atomics.load(signatureView, 6),
+        Atomics.load(signatureView, 7),
+      );
+      allocator.take_memory(
+        Atomics.load(signatureView, 1),
+        Atomics.load(signatureView, 2),
+      );
+      objectText = new TextDecoder().decode(
+        allocator.take_memory(
+          Atomics.load(signatureView, 4),
+          Atomics.load(signatureView, 5),
+        ),
+      );
+      completeWorkerRequest(
+        requestView,
+        WorkerRequestState.Ready,
+        WorkerRequestFailure.None,
+        9,
+        new Int32Array(destroyStatus),
+      );
+    };
+    internals.block_wait_base_func = () => undefined;
+
+    assert.strictEqual(
+      workerRef.new_worker("fake:child", { type: "module" }).get_id(),
+      9,
+    );
+    assert.strictEqual(objectText, "{}");
+  });
+
+  test("mutation commands reject once lifecycle teardown starts", () => {
+    const destroyStatus = createDestroyStatus();
+    const reference = WorkerBackgroundRefObjectConstructor(destroyStatus);
+    const workerRef = WorkerBackgroundRef.init_self(reference);
+    const signatureView = new Int32Array(reference.signature_input);
+    const internals = workerRef as unknown as {
+      block_wait_base_func: () => void;
+      call_base_func: () => void;
+    };
+    let publications = 0;
+    internals.call_base_func = () => {
+      publications += 1;
+    };
+    internals.block_wait_base_func = () => undefined;
+    beginDestroy(new Int32Array(destroyStatus));
+
+    assert.throws(() => workerRef.terminate_all_workers(), WorkerDestroyError);
+    assert.throws(() => workerRef.kill_animal(3), WorkerDestroyError);
+    assert.strictEqual(publications, 0);
+    assert.strictEqual(Atomics.load(signatureView, 0), 0);
+  });
+
   test("destroy wake does not replay a stale opcode", async () => {
     installFakeWorker();
     const { destroyView, lockView, signatureView } = createBackgroundHarness();
@@ -501,6 +772,44 @@ describe("WorkerBackground teardown races", () => {
       /runtime failed/,
     );
 
+    assert.strictEqual(
+      Atomics.load(new Int32Array(allocator.share_arrays_memory), 1),
+      0,
+    );
+  });
+
+  test("runtime error payload has exactly one consuming waiter", async () => {
+    const destroyStatus = createDestroyStatus();
+    const reference = WorkerBackgroundRefObjectConstructor(destroyStatus);
+    const allocator = AllocatorUseArrayBuffer.init_self(reference.allocator);
+    const address = new SharedArrayBuffer(8);
+    const [ptr, len] = await allocator.async_write(
+      new TextEncoder().encode(
+        JSON.stringify({
+          name: "Error",
+          message: "single-owner runtime failure",
+          stack: "Error: single-owner runtime failure",
+        }),
+      ),
+      address,
+      0,
+    );
+    const completion = new Int32Array(reference.lock, 12);
+    Atomics.store(completion, 1, ptr);
+    Atomics.store(completion, 2, len);
+    Atomics.store(completion, 0, RuntimeCompletion.Error);
+    const first = WorkerBackgroundRef.init_self(reference);
+    const second = WorkerBackgroundRef.init_self(reference);
+
+    const results = await Promise.allSettled([
+      first.async_wait_done_or_error(),
+      second.async_wait_done_or_error(),
+    ]);
+
+    assert.deepStrictEqual(
+      results.map((result) => result.status),
+      ["rejected", "rejected"],
+    );
     assert.strictEqual(
       Atomics.load(new Int32Array(allocator.share_arrays_memory), 1),
       0,

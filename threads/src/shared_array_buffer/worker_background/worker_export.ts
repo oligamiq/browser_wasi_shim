@@ -13,6 +13,13 @@ export type WorkerBackgroundRefObject = {
 export const SIGNATURE_REQUEST_STATUS_PTR = 6;
 export const SIGNATURE_REQUEST_STATUS_LEN = 7;
 
+export enum WorkerCommandState {
+  Published = 0,
+  Idle = 1,
+  Preparing = 2,
+  Claimed = 3,
+}
+
 /**
  * Constructs a new default WorkerBackgroundRefObject.
  *
@@ -22,7 +29,7 @@ export const WorkerBackgroundRefObjectConstructor = (
   destroyStatus: SharedArrayBuffer,
 ): WorkerBackgroundRefObject => {
   const lock = new SharedArrayBuffer(24);
-  new Int32Array(lock)[1] = 1;
+  new Int32Array(lock)[1] = WorkerCommandState.Idle;
   return {
     allocator: {
       share_arrays_memory: new SharedArrayBuffer(10 * 1024),

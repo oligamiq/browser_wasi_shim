@@ -42,6 +42,7 @@ export enum RuntimeCompletion {
   Done = 3,
   Cancelled = 4,
   Completing = 5,
+  ErrorConsumed = 6,
 }
 
 const RUNTIME_COMPLETION_STATE = 0;

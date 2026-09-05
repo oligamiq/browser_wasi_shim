@@ -31,6 +31,7 @@ import {
 import {
   SIGNATURE_REQUEST_STATUS_LEN,
   SIGNATURE_REQUEST_STATUS_PTR,
+  WorkerCommandState,
 } from "./worker_export.js";
 import type { WorkerBackgroundRefObject } from "./worker_export.js";
 
@@ -83,7 +84,7 @@ export class WorkerBackground<T> {
       Atomics.load(initialLockView, 1) === 0 &&
       Atomics.load(initialLockView, 2) === 0
     ) {
-      Atomics.store(initialLockView, 1, 1);
+      Atomics.store(initialLockView, 1, WorkerCommandState.Idle);
     }
     this.allocator =
       allocator ??
@@ -498,7 +499,7 @@ export class WorkerBackground<T> {
     }
   }
 
-  private cancel_published_command(signatureView: Int32Array): void {
+  private cancel_claimed_command(signatureView: Int32Array): void {
     const opcode = Atomics.load(signatureView, 0);
     if (opcode !== 1 && opcode !== 2) return;
 
@@ -545,9 +546,59 @@ export class WorkerBackground<T> {
   }
 
   private acknowledge_command(lockView: Int32Array): void {
-    Atomics.store(lockView, 1, 1);
+    Atomics.store(lockView, 1, WorkerCommandState.Idle);
     Atomics.store(lockView, 2, 0);
+    Atomics.notify(lockView, 1);
     Atomics.notify(lockView, 2, 1);
+  }
+
+  private async claim_command(lockView: Int32Array): Promise<boolean> {
+    for (;;) {
+      const state = Atomics.load(lockView, 1);
+      if (
+        state === WorkerCommandState.Idle &&
+        Atomics.load(lockView, 0) === 0
+      ) {
+        return false;
+      }
+      if (state === WorkerCommandState.Published) {
+        if (
+          Atomics.compareExchange(
+            lockView,
+            1,
+            WorkerCommandState.Published,
+            WorkerCommandState.Claimed,
+          ) === WorkerCommandState.Published
+        ) {
+          return true;
+        }
+        continue;
+      }
+      if (
+        state !== WorkerCommandState.Idle &&
+        state !== WorkerCommandState.Preparing &&
+        state !== WorkerCommandState.Claimed
+      ) {
+        throw new Error(`unknown worker command state: ${state}`);
+      }
+      const { value } = Atomics.waitAsync(lockView, 1, state);
+      const result = value instanceof Promise ? await value : value;
+      if (result === "timed-out") throw new Error("timed-out");
+    }
+  }
+
+  private async finish_listen_teardown(
+    lockView: Int32Array,
+    signatureView: Int32Array,
+  ): Promise<void> {
+    if (await this.claim_command(lockView)) {
+      try {
+        this.cancel_claimed_command(signatureView);
+      } finally {
+        this.acknowledge_command(lockView);
+      }
+    }
+    await this.teardown();
   }
 
   private register_handlers(record: WorkerRecord, isStart: boolean): void {
@@ -784,41 +835,19 @@ export class WorkerBackground<T> {
     const lockView = new Int32Array(this.lock);
     const signatureView = new Int32Array(this.signature_input);
     const destroyView = new Int32Array(this.destroy_status);
-    Atomics.store(lockView, 0, 0);
-
     for (;;) {
       if (readLifecycle(destroyView) !== WorkerLifecycle.Running) {
-        if (
-          Atomics.load(lockView, 1) === 0 ||
-          Atomics.load(lockView, 2) === 1
-        ) {
-          try {
-            this.cancel_published_command(signatureView);
-          } finally {
-            this.acknowledge_command(lockView);
-          }
-        }
-        await this.teardown();
+        await this.finish_listen_teardown(lockView, signatureView);
         return;
       }
 
-      const waiter = Atomics.waitAsync(lockView, 1, 1);
+      const waiter = Atomics.waitAsync(lockView, 1, WorkerCommandState.Idle);
       if (readLifecycle(destroyView) !== WorkerLifecycle.Running) {
         if (waiter.value instanceof Promise) {
           Atomics.notify(lockView, 1);
           await waiter.value;
         }
-        if (
-          Atomics.load(lockView, 1) === 0 ||
-          Atomics.load(lockView, 2) === 1
-        ) {
-          try {
-            this.cancel_published_command(signatureView);
-          } finally {
-            this.acknowledge_command(lockView);
-          }
-        }
-        await this.teardown();
+        await this.finish_listen_teardown(lockView, signatureView);
         return;
       }
 
@@ -827,21 +856,21 @@ export class WorkerBackground<T> {
       if (result === "timed-out") throw new Error("timed-out");
 
       if (readLifecycle(destroyView) !== WorkerLifecycle.Running) {
-        if (
-          Atomics.load(lockView, 1) === 0 ||
-          Atomics.load(lockView, 2) === 1
-        ) {
-          try {
-            this.cancel_published_command(signatureView);
-          } finally {
-            this.acknowledge_command(lockView);
-          }
+        await this.finish_listen_teardown(lockView, signatureView);
+        return;
+      }
+
+      if (!(await this.claim_command(lockView))) continue;
+
+      if (readLifecycle(destroyView) !== WorkerLifecycle.Running) {
+        try {
+          this.cancel_claimed_command(signatureView);
+        } finally {
+          this.acknowledge_command(lockView);
         }
         await this.teardown();
         return;
       }
-
-      if (Atomics.load(lockView, 1) !== 0) continue;
 
       try {
         switch (Atomics.load(signatureView, 0)) {
