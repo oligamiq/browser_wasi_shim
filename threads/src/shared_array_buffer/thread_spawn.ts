@@ -204,17 +204,25 @@ export class ThreadSpawner {
         const failure = new WorkerDestroyError(code);
         failure.cause = new Error(coordinatorErrorMessage(error));
         this.coordinator_failure = failure;
+        const failedCoordinator = this.worker_background_worker;
+        if (failedCoordinator !== undefined) {
+          this.worker_background_worker = undefined;
+          failedCoordinator.onmessage = null;
+          failedCoordinator.onerror = null;
+          failedCoordinator.onmessageerror = null;
+          failedCoordinator.terminate();
+        }
         if (!this.worker_background_ready_settled) {
           this.worker_background_ready_settled = true;
           this.worker_background_readiness_error = failure;
           reject(failure);
         }
         beginDestroy(destroyView);
-        void this.worker_background_ref
-          .cancel_pending_command()
-          .catch((commandError) => console.error(commandError));
-        markDestroyFailed(destroyView, code);
         this.start_destroy_finalization();
+        void this.worker_background_ref
+          .recover_failed_coordinator_command()
+          .catch((commandError) => console.error(commandError))
+          .finally(() => markDestroyFailed(destroyView, code));
       };
 
       let coordinator: Worker;

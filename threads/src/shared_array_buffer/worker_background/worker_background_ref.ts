@@ -26,6 +26,13 @@ import {
 import {
   SIGNATURE_REQUEST_STATUS_LEN,
   SIGNATURE_REQUEST_STATUS_PTR,
+  wakeWorkerCommandActivity,
+  WORKER_COMMAND_ACK,
+  WORKER_COMMAND_ACTIVITY_EPOCH,
+  WORKER_COMMAND_MUTEX,
+  WORKER_COMMAND_PHASE,
+  WORKER_RUNTIME_COMPLETION_OFFSET_BYTES,
+  WORKER_RUNTIME_COMPLETION_WORDS,
   WorkerCommandState,
 } from "./worker_export.ts";
 import type {
@@ -80,14 +87,15 @@ export class WorkerBackgroundRef {
     const view = new Int32Array(this.lock);
     // eslint-disable-next-line no-constant-condition
     while (true) {
-      const lock = Atomics.wait(view, 0, 1);
+      const lock = Atomics.wait(view, WORKER_COMMAND_MUTEX, 1);
       if (lock === "timed-out") {
         throw new Error("timed-out lock");
       }
-      const old = Atomics.compareExchange(view, 0, 0, 1);
+      const old = Atomics.compareExchange(view, WORKER_COMMAND_MUTEX, 0, 1);
       if (old === 0) {
-        Atomics.store(view, 1, WorkerCommandState.Preparing);
-        Atomics.notify(view, 1);
+        wakeWorkerCommandActivity(view);
+        Atomics.store(view, WORKER_COMMAND_PHASE, WorkerCommandState.Preparing);
+        wakeWorkerCommandActivity(view);
         return;
       }
     }
@@ -97,14 +105,15 @@ export class WorkerBackgroundRef {
     const view = new Int32Array(this.lock);
     // eslint-disable-next-line no-constant-condition
     while (true) {
-      const { value } = Atomics.waitAsync(view, 0, 1);
+      const { value } = Atomics.waitAsync(view, WORKER_COMMAND_MUTEX, 1);
       if ((await value) === "timed-out") {
         throw new Error("timed-out lock");
       }
-      const old = Atomics.compareExchange(view, 0, 0, 1);
+      const old = Atomics.compareExchange(view, WORKER_COMMAND_MUTEX, 0, 1);
       if (old === 0) {
-        Atomics.store(view, 1, WorkerCommandState.Preparing);
-        Atomics.notify(view, 1);
+        wakeWorkerCommandActivity(view);
+        Atomics.store(view, WORKER_COMMAND_PHASE, WorkerCommandState.Preparing);
+        wakeWorkerCommandActivity(view);
         return;
       }
     }
@@ -112,15 +121,15 @@ export class WorkerBackgroundRef {
 
   private call_base_func(): void {
     const view = new Int32Array(this.lock);
-    Atomics.store(view, 2, 1);
-    Atomics.store(view, 1, WorkerCommandState.Published);
-    Atomics.notify(view, 1, 1);
+    Atomics.store(view, WORKER_COMMAND_ACK, 1);
+    Atomics.store(view, WORKER_COMMAND_PHASE, WorkerCommandState.Published);
+    wakeWorkerCommandActivity(view);
   }
 
   // wait base_func
   private block_wait_base_func(): void {
     const view = new Int32Array(this.lock);
-    const lock = Atomics.wait(view, 2, 1);
+    const lock = Atomics.wait(view, WORKER_COMMAND_ACK, 1);
     if (lock === "timed-out") {
       throw new Error("timed-out lock");
     }
@@ -128,7 +137,7 @@ export class WorkerBackgroundRef {
 
   private async async_wait_base_func(): Promise<void> {
     const view = new Int32Array(this.lock);
-    const { value } = Atomics.waitAsync(view, 2, 1);
+    const { value } = Atomics.waitAsync(view, WORKER_COMMAND_ACK, 1);
     if ((await value) === "timed-out") {
       throw new Error("timed-out lock");
     }
@@ -140,15 +149,17 @@ export class WorkerBackgroundRef {
     if (
       Atomics.compareExchange(
         view,
-        1,
+        WORKER_COMMAND_PHASE,
         WorkerCommandState.Preparing,
         WorkerCommandState.Idle,
       ) === WorkerCommandState.Preparing
     ) {
-      Atomics.notify(view, 1);
+      wakeWorkerCommandActivity(view);
     }
-    Atomics.store(view, 0, 0);
-    Atomics.notify(view, 0, 1);
+    if (Atomics.exchange(view, WORKER_COMMAND_MUTEX, 0) !== 0) {
+      wakeWorkerCommandActivity(view);
+    }
+    Atomics.notify(view, WORKER_COMMAND_MUTEX, 1);
   }
 
   private encode_post_object(postObj: unknown): Uint8Array {
@@ -169,7 +180,7 @@ export class WorkerBackgroundRef {
   }
 
   notify_destroy(): void {
-    Atomics.notify(new Int32Array(this.lock), 1);
+    wakeWorkerCommandActivity(new Int32Array(this.lock));
   }
 
   private lifecycle_error(destroyView: Int32Array): WorkerDestroyError {
@@ -489,7 +500,11 @@ export class WorkerBackgroundRef {
   }
 
   done_notify(code: number): void {
-    const notify_view = new Int32Array(this.lock, 12);
+    const notify_view = new Int32Array(
+      this.lock,
+      WORKER_RUNTIME_COMPLETION_OFFSET_BYTES,
+      WORKER_RUNTIME_COMPLETION_WORDS,
+    );
     if (!claimRuntimeCompletion(notify_view)) {
       console.error("what happened?");
       return;
@@ -499,7 +514,11 @@ export class WorkerBackgroundRef {
   }
 
   async async_wait_done_or_error(): Promise<number> {
-    const notify_view = new Int32Array(this.lock, 12);
+    const notify_view = new Int32Array(
+      this.lock,
+      WORKER_RUNTIME_COMPLETION_OFFSET_BYTES,
+      WORKER_RUNTIME_COMPLETION_WORDS,
+    );
     for (;;) {
       const state = Atomics.load(notify_view, 0);
       if (
@@ -515,7 +534,11 @@ export class WorkerBackgroundRef {
   }
 
   block_wait_done_or_error(): number {
-    const notify_view = new Int32Array(this.lock, 12);
+    const notify_view = new Int32Array(
+      this.lock,
+      WORKER_RUNTIME_COMPLETION_OFFSET_BYTES,
+      WORKER_RUNTIME_COMPLETION_WORDS,
+    );
     for (;;) {
       const state = Atomics.load(notify_view, 0);
       if (
@@ -572,72 +595,110 @@ export class WorkerBackgroundRef {
     }
   }
 
-  private cancel_claimed_command(): void {
+  private cancel_command_request(reclaimPayloads: boolean): void {
     const signatureView = new Int32Array(this.signature_input);
     const opcode = Atomics.load(signatureView, 0);
     if (opcode !== 1 && opcode !== 2) return;
 
-    const requestView = createWorkerRequestView(
-      this.allocator.share_arrays_memory,
-      Atomics.load(signatureView, SIGNATURE_REQUEST_STATUS_PTR),
-      Atomics.load(signatureView, SIGNATURE_REQUEST_STATUS_LEN),
-    );
-    this.allocator.take_memory(
-      Atomics.load(signatureView, 1),
-      Atomics.load(signatureView, 2),
-    );
-    this.allocator.take_memory(
-      Atomics.load(signatureView, 4),
-      Atomics.load(signatureView, 5),
-    );
-    completeWorkerRequest(
-      requestView,
-      WorkerRequestState.Cancelled,
-      WorkerRequestFailure.Destroyed,
-      0,
-      new Int32Array(this.destroy_status),
-    );
+    let requestView: Int32Array | undefined;
+    try {
+      requestView = createWorkerRequestView(
+        this.allocator.share_arrays_memory,
+        Atomics.load(signatureView, SIGNATURE_REQUEST_STATUS_PTR),
+        Atomics.load(signatureView, SIGNATURE_REQUEST_STATUS_LEN),
+      );
+    } catch (error) {
+      console.error(error);
+    }
+
+    if (reclaimPayloads) {
+      for (const [pointerIndex, lengthIndex] of [
+        [1, 2],
+        [4, 5],
+      ] as const) {
+        try {
+          this.allocator.take_memory(
+            Atomics.load(signatureView, pointerIndex),
+            Atomics.load(signatureView, lengthIndex),
+          );
+        } catch (error) {
+          console.error(error);
+        }
+      }
+    }
+
+    if (requestView !== undefined) {
+      completeWorkerRequest(
+        requestView,
+        WorkerRequestState.Cancelled,
+        WorkerRequestFailure.Destroyed,
+        0,
+        new Int32Array(this.destroy_status),
+      );
+    }
   }
 
-  async cancel_pending_command(): Promise<void> {
+  private acknowledge_failed_command(lockView: Int32Array): void {
+    Atomics.store(lockView, WORKER_COMMAND_PHASE, WorkerCommandState.Idle);
+    wakeWorkerCommandActivity(lockView);
+    Atomics.store(lockView, WORKER_COMMAND_ACK, 0);
+    Atomics.notify(lockView, WORKER_COMMAND_ACK, 1);
+  }
+
+  async recover_failed_coordinator_command(): Promise<void> {
     const lockView = new Int32Array(this.lock);
     for (;;) {
-      const state = Atomics.load(lockView, 1);
-      if (
-        state === WorkerCommandState.Idle &&
-        Atomics.load(lockView, 0) === 0
-      ) {
+      const epoch = Atomics.load(lockView, WORKER_COMMAND_ACTIVITY_EPOCH);
+      const state = Atomics.load(lockView, WORKER_COMMAND_PHASE);
+      const mutex = Atomics.load(lockView, WORKER_COMMAND_MUTEX);
+      if (state === WorkerCommandState.Idle && mutex === 0) {
         return;
       }
       if (state === WorkerCommandState.Published) {
         if (
           Atomics.compareExchange(
             lockView,
-            1,
+            WORKER_COMMAND_PHASE,
             WorkerCommandState.Published,
             WorkerCommandState.Claimed,
           ) !== WorkerCommandState.Published
         ) {
           continue;
         }
+        wakeWorkerCommandActivity(lockView);
         try {
-          this.cancel_claimed_command();
+          this.cancel_command_request(true);
         } finally {
-          Atomics.store(lockView, 1, WorkerCommandState.Idle);
-          Atomics.store(lockView, 2, 0);
-          Atomics.notify(lockView, 1);
-          Atomics.notify(lockView, 2, 1);
+          this.acknowledge_failed_command(lockView);
+        }
+        return;
+      }
+      if (state === WorkerCommandState.Claimed) {
+        try {
+          this.cancel_command_request(false);
+        } finally {
+          this.acknowledge_failed_command(lockView);
         }
         return;
       }
       if (
         state !== WorkerCommandState.Idle &&
-        state !== WorkerCommandState.Preparing &&
-        state !== WorkerCommandState.Claimed
+        state !== WorkerCommandState.Preparing
       ) {
         throw new Error(`unknown worker command state: ${state}`);
       }
-      const { value } = Atomics.waitAsync(lockView, 1, state);
+      if (
+        Atomics.load(lockView, WORKER_COMMAND_PHASE) !== state ||
+        Atomics.load(lockView, WORKER_COMMAND_MUTEX) !== mutex ||
+        Atomics.load(lockView, WORKER_COMMAND_ACTIVITY_EPOCH) !== epoch
+      ) {
+        continue;
+      }
+      const { value } = Atomics.waitAsync(
+        lockView,
+        WORKER_COMMAND_ACTIVITY_EPOCH,
+        epoch,
+      );
       const result = value instanceof Promise ? await value : value;
       if (result === "timed-out") throw new Error("timed-out");
     }

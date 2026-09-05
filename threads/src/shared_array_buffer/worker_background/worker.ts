@@ -31,6 +31,14 @@ import {
 import {
   SIGNATURE_REQUEST_STATUS_LEN,
   SIGNATURE_REQUEST_STATUS_PTR,
+  wakeWorkerCommandActivity,
+  WORKER_BACKGROUND_LOCK_BYTES,
+  WORKER_COMMAND_ACK,
+  WORKER_COMMAND_ACTIVITY_EPOCH,
+  WORKER_COMMAND_MUTEX,
+  WORKER_COMMAND_PHASE,
+  WORKER_RUNTIME_COMPLETION_OFFSET_BYTES,
+  WORKER_RUNTIME_COMPLETION_WORDS,
   WorkerCommandState,
 } from "./worker_export.js";
 import type { WorkerBackgroundRefObject } from "./worker_export.js";
@@ -64,7 +72,6 @@ export class WorkerBackground<T> {
   private animal_workers = new Map<number, WorkerRecord>();
   private teardown_promise?: Promise<void>;
   private teardown_failure?: WorkerDestroyFailureCode;
-  private teardown_error?: unknown;
   private teardown_requester?: WorkerRecord;
   private schedule_timeout: typeof setTimeout = setTimeout;
   private cancel_timeout: typeof clearTimeout = clearTimeout;
@@ -78,13 +85,18 @@ export class WorkerBackground<T> {
   ) {
     this.override_object = override_object;
     this.destroy_status = destroy_status;
-    this.lock = lock ?? new SharedArrayBuffer(24);
+    this.lock = lock ?? new SharedArrayBuffer(WORKER_BACKGROUND_LOCK_BYTES);
     const initialLockView = new Int32Array(this.lock);
     if (
-      Atomics.load(initialLockView, 1) === 0 &&
-      Atomics.load(initialLockView, 2) === 0
+      Atomics.load(initialLockView, WORKER_COMMAND_PHASE) === 0 &&
+      Atomics.load(initialLockView, WORKER_COMMAND_ACK) === 0
     ) {
-      Atomics.store(initialLockView, 1, WorkerCommandState.Idle);
+      Atomics.store(
+        initialLockView,
+        WORKER_COMMAND_PHASE,
+        WorkerCommandState.Idle,
+      );
+      wakeWorkerCommandActivity(initialLockView);
     }
     this.allocator =
       allocator ??
@@ -181,7 +193,11 @@ export class WorkerBackground<T> {
   }
 
   private cancel_runtime(): void {
-    const completionView = new Int32Array(this.lock, 12);
+    const completionView = new Int32Array(
+      this.lock,
+      WORKER_RUNTIME_COMPLETION_OFFSET_BYTES,
+      WORKER_RUNTIME_COMPLETION_WORDS,
+    );
     if (claimRuntimeCompletion(completionView)) {
       finishRuntimeCompletion(completionView, RuntimeCompletion.Cancelled);
     }
@@ -195,13 +211,12 @@ export class WorkerBackground<T> {
   }
 
   private fail_runtime(
-    error: unknown,
+    _error: unknown,
     code = WorkerDestroyFailureCode.CoordinatorRuntime,
   ): void {
     this.teardown_failure ??= code;
-    this.teardown_error ??= error;
     beginDestroy(new Int32Array(this.destroy_status));
-    Atomics.notify(new Int32Array(this.lock), 1);
+    wakeWorkerCommandActivity(new Int32Array(this.lock));
     void this.teardown();
   }
 
@@ -251,14 +266,6 @@ export class WorkerBackground<T> {
     this.workers = [undefined];
     this.start_worker = undefined;
     this.animal_workers.clear();
-
-    if (this.teardown_error !== undefined) {
-      try {
-        await this.publish_runtime_error(this.teardown_error);
-      } catch (error) {
-        this.record_teardown_error(error);
-      }
-    }
 
     for (const record of records) {
       const requestView = record.request_view;
@@ -383,20 +390,32 @@ export class WorkerBackground<T> {
   }
 
   private publish_runtime_exit(code: number): void {
-    const completionView = new Int32Array(this.lock, 12);
+    const completionView = new Int32Array(
+      this.lock,
+      WORKER_RUNTIME_COMPLETION_OFFSET_BYTES,
+      WORKER_RUNTIME_COMPLETION_WORDS,
+    );
     if (!claimRuntimeCompletion(completionView)) return;
     Atomics.store(completionView, 1, code);
     finishRuntimeCompletion(completionView, RuntimeCompletion.Exit);
   }
 
   private publish_runtime_done(): void {
-    const completionView = new Int32Array(this.lock, 12);
+    const completionView = new Int32Array(
+      this.lock,
+      WORKER_RUNTIME_COMPLETION_OFFSET_BYTES,
+      WORKER_RUNTIME_COMPLETION_WORDS,
+    );
     if (!claimRuntimeCompletion(completionView)) return;
     finishRuntimeCompletion(completionView, RuntimeCompletion.Done);
   }
 
   private async publish_runtime_error(value: unknown): Promise<void> {
-    const completionView = new Int32Array(this.lock, 12);
+    const completionView = new Int32Array(
+      this.lock,
+      WORKER_RUNTIME_COMPLETION_OFFSET_BYTES,
+      WORKER_RUNTIME_COMPLETION_WORDS,
+    );
     let allocation: [number, number] | undefined;
     try {
       const serialized = Serializer.serialize(asError(value));
@@ -546,30 +565,30 @@ export class WorkerBackground<T> {
   }
 
   private acknowledge_command(lockView: Int32Array): void {
-    Atomics.store(lockView, 1, WorkerCommandState.Idle);
-    Atomics.store(lockView, 2, 0);
-    Atomics.notify(lockView, 1);
-    Atomics.notify(lockView, 2, 1);
+    Atomics.store(lockView, WORKER_COMMAND_PHASE, WorkerCommandState.Idle);
+    wakeWorkerCommandActivity(lockView);
+    Atomics.store(lockView, WORKER_COMMAND_ACK, 0);
+    Atomics.notify(lockView, WORKER_COMMAND_ACK, 1);
   }
 
   private async claim_command(lockView: Int32Array): Promise<boolean> {
     for (;;) {
-      const state = Atomics.load(lockView, 1);
-      if (
-        state === WorkerCommandState.Idle &&
-        Atomics.load(lockView, 0) === 0
-      ) {
+      const epoch = Atomics.load(lockView, WORKER_COMMAND_ACTIVITY_EPOCH);
+      const state = Atomics.load(lockView, WORKER_COMMAND_PHASE);
+      const mutex = Atomics.load(lockView, WORKER_COMMAND_MUTEX);
+      if (state === WorkerCommandState.Idle && mutex === 0) {
         return false;
       }
       if (state === WorkerCommandState.Published) {
         if (
           Atomics.compareExchange(
             lockView,
-            1,
+            WORKER_COMMAND_PHASE,
             WorkerCommandState.Published,
             WorkerCommandState.Claimed,
           ) === WorkerCommandState.Published
         ) {
+          wakeWorkerCommandActivity(lockView);
           return true;
         }
         continue;
@@ -581,7 +600,18 @@ export class WorkerBackground<T> {
       ) {
         throw new Error(`unknown worker command state: ${state}`);
       }
-      const { value } = Atomics.waitAsync(lockView, 1, state);
+      if (
+        Atomics.load(lockView, WORKER_COMMAND_PHASE) !== state ||
+        Atomics.load(lockView, WORKER_COMMAND_MUTEX) !== mutex ||
+        Atomics.load(lockView, WORKER_COMMAND_ACTIVITY_EPOCH) !== epoch
+      ) {
+        continue;
+      }
+      const { value } = Atomics.waitAsync(
+        lockView,
+        WORKER_COMMAND_ACTIVITY_EPOCH,
+        epoch,
+      );
       const result = value instanceof Promise ? await value : value;
       if (result === "timed-out") throw new Error("timed-out");
     }
@@ -831,6 +861,39 @@ export class WorkerBackground<T> {
     this.complete_request_ready(record);
   }
 
+  private process_claimed_command(signatureView: Int32Array): void {
+    switch (Atomics.load(signatureView, 0)) {
+      case 1:
+        this.create_worker(signatureView);
+        break;
+      case 2:
+        this.create_start_worker(signatureView);
+        break;
+      case 3:
+        this.terminate_registered_workers();
+        break;
+      case 4: {
+        const animalId = Atomics.load(signatureView, 1);
+        const record = this.animal_workers.get(animalId);
+        if (record !== undefined) {
+          record.worker.postMessage({
+            msg: "kill_animal",
+            animal_id: animalId,
+          });
+          if (this.animal_workers.get(animalId) === record) {
+            this.animal_workers.delete(animalId);
+          }
+        }
+        break;
+      }
+      default:
+        this.fail_runtime(
+          new Error("unknown worker background command"),
+          WorkerDestroyFailureCode.Protocol,
+        );
+    }
+  }
+
   private async listen(): Promise<void> {
     const lockView = new Int32Array(this.lock);
     const signatureView = new Int32Array(this.signature_input);
@@ -841,27 +904,29 @@ export class WorkerBackground<T> {
         return;
       }
 
-      const waiter = Atomics.waitAsync(lockView, 1, WorkerCommandState.Idle);
-      if (readLifecycle(destroyView) !== WorkerLifecycle.Running) {
-        if (waiter.value instanceof Promise) {
-          Atomics.notify(lockView, 1);
-          await waiter.value;
+      const phase = Atomics.load(lockView, WORKER_COMMAND_PHASE);
+      const mutex = Atomics.load(lockView, WORKER_COMMAND_MUTEX);
+      if (phase === WorkerCommandState.Idle && mutex === 0) {
+        const epoch = Atomics.load(lockView, WORKER_COMMAND_ACTIVITY_EPOCH);
+        if (
+          Atomics.load(lockView, WORKER_COMMAND_PHASE) !== phase ||
+          Atomics.load(lockView, WORKER_COMMAND_MUTEX) !== mutex ||
+          readLifecycle(destroyView) !== WorkerLifecycle.Running ||
+          Atomics.load(lockView, WORKER_COMMAND_ACTIVITY_EPOCH) !== epoch
+        ) {
+          continue;
         }
-        await this.finish_listen_teardown(lockView, signatureView);
-        return;
-      }
-
-      const { value } = waiter;
-      const result = value instanceof Promise ? await value : value;
-      if (result === "timed-out") throw new Error("timed-out");
-
-      if (readLifecycle(destroyView) !== WorkerLifecycle.Running) {
-        await this.finish_listen_teardown(lockView, signatureView);
-        return;
+        const { value } = Atomics.waitAsync(
+          lockView,
+          WORKER_COMMAND_ACTIVITY_EPOCH,
+          epoch,
+        );
+        const result = value instanceof Promise ? await value : value;
+        if (result === "timed-out") throw new Error("timed-out");
+        continue;
       }
 
       if (!(await this.claim_command(lockView))) continue;
-
       if (readLifecycle(destroyView) !== WorkerLifecycle.Running) {
         try {
           this.cancel_claimed_command(signatureView);
@@ -873,36 +938,7 @@ export class WorkerBackground<T> {
       }
 
       try {
-        switch (Atomics.load(signatureView, 0)) {
-          case 1:
-            this.create_worker(signatureView);
-            break;
-          case 2:
-            this.create_start_worker(signatureView);
-            break;
-          case 3:
-            this.terminate_registered_workers();
-            break;
-          case 4: {
-            const animalId = Atomics.load(signatureView, 1);
-            const record = this.animal_workers.get(animalId);
-            if (record !== undefined) {
-              record.worker.postMessage({
-                msg: "kill_animal",
-                animal_id: animalId,
-              });
-              if (this.animal_workers.get(animalId) === record) {
-                this.animal_workers.delete(animalId);
-              }
-            }
-            break;
-          }
-          default:
-            this.fail_runtime(
-              new Error("unknown worker background command"),
-              WorkerDestroyFailureCode.Protocol,
-            );
-        }
+        this.process_claimed_command(signatureView);
       } catch (error) {
         this.fail_runtime(error);
       } finally {
