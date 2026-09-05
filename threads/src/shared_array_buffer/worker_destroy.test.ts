@@ -1,8 +1,9 @@
 import assert from "node:assert";
 import { afterEach, describe, test } from "node:test";
+import { WASIFarmAnimal } from "../animals.ts";
 import { DestroyerHandle } from "../destroyer_handle.ts";
 import { AllocatorUseArrayBuffer } from "./allocator.ts";
-import { ThreadSpawner } from "./thread_spawn.ts";
+import { ThreadSpawner, thread_spawn_on_worker } from "./thread_spawn.ts";
 import { WorkerBackground } from "./worker_background/worker.ts";
 import { WorkerBackgroundRef } from "./worker_background/worker_background_ref.ts";
 import type { WorkerBackgroundRefObject } from "./worker_background/worker_export.ts";
@@ -17,7 +18,9 @@ import {
   DESTROY_FAILURE_CODE,
   DESTROY_REQUESTER_STATUS,
   DESTROY_WAKE_EPOCH,
+  markDestroyed,
   readLifecycle,
+  readRequesterAnimalId,
   RequesterStatus,
   waitForDestroyTerminal,
   WorkerDestroyError,
@@ -106,13 +109,16 @@ async function captureDestroyError(
 type WorkerMessageHandler = ((event: MessageEvent) => unknown) | null;
 type WorkerErrorHandler = ((event: ErrorEvent) => unknown) | null;
 type TestWorkerRecord = {
-  worker: Worker;
+  worker?: Worker;
+  animal_id: number;
+  retired: boolean;
   worker_id: number;
   request_view?: Int32Array;
 };
 
 class FakeWorker {
   static instances: FakeWorker[] = [];
+  static constructorError: Error | undefined;
   static onPostMessage:
     | ((worker: FakeWorker, value: unknown) => void)
     | undefined;
@@ -122,15 +128,20 @@ class FakeWorker {
   onmessageerror: WorkerMessageHandler = null;
   onerror: WorkerErrorHandler = null;
   terminateCount = 0;
+  readonly postedMessages: unknown[] = [];
 
   constructor(
     readonly url: string | URL,
     readonly options?: WorkerOptions,
   ) {
+    if (FakeWorker.constructorError !== undefined) {
+      throw FakeWorker.constructorError;
+    }
     FakeWorker.instances.push(this);
   }
 
   postMessage(value: unknown): void {
+    this.postedMessages.push(value);
     FakeWorker.onPostMessage?.(this, value);
   }
 
@@ -157,9 +168,14 @@ class FakeWorker {
 
 const originalWorker = Object.getOwnPropertyDescriptor(globalThis, "Worker");
 const originalClose = Object.getOwnPropertyDescriptor(globalThis, "close");
+const originalPostMessage = Object.getOwnPropertyDescriptor(
+  globalThis,
+  "postMessage",
+);
 
 function installFakeWorker(): void {
   FakeWorker.instances = [];
+  FakeWorker.constructorError = undefined;
   FakeWorker.onPostMessage = undefined;
   FakeWorker.onTerminate = undefined;
   Object.defineProperty(globalThis, "Worker", {
@@ -175,7 +191,7 @@ function installFakeWorker(): void {
 }
 
 function restoreGlobal(
-  name: "Worker" | "close",
+  name: "Worker" | "close" | "postMessage",
   descriptor: PropertyDescriptor | undefined,
 ): void {
   if (descriptor === undefined) {
@@ -188,7 +204,9 @@ function restoreGlobal(
 afterEach(() => {
   restoreGlobal("Worker", originalWorker);
   restoreGlobal("close", originalClose);
+  restoreGlobal("postMessage", originalPostMessage);
   FakeWorker.instances = [];
+  FakeWorker.constructorError = undefined;
   FakeWorker.onPostMessage = undefined;
   FakeWorker.onTerminate = undefined;
 });
@@ -198,6 +216,7 @@ function createBackgroundHarness(): {
   background: WorkerBackground<Record<string, never>>;
   destroyView: Int32Array;
   lockView: Int32Array;
+  reference: WorkerBackgroundRefObject;
   signatureView: Int32Array;
 } {
   const destroyStatus = createDestroyStatus();
@@ -215,8 +234,135 @@ function createBackgroundHarness(): {
     background,
     destroyView: new Int32Array(destroyStatus),
     lockView: new Int32Array(reference.lock),
+    reference,
     signatureView: new Int32Array(reference.signature_input),
   };
+}
+
+type WorkerBackgroundInternals = {
+  allocate_animal_id: () => number;
+  animal_workers: Map<number, TestWorkerRecord>;
+  create_start_worker: (signatureView: Int32Array) => void;
+  create_worker: (signatureView: Int32Array) => void;
+  free_animal_ids: number[];
+  kill_animal: (animalId: number) => void;
+  next_animal_id: number;
+  pending_animal_workers: Map<number, TestWorkerRecord>;
+  register_handlers: (record: TestWorkerRecord, isStart: boolean) => void;
+  start_worker?: TestWorkerRecord;
+  worker_animals: Map<number, number>;
+  workers: Array<TestWorkerRecord | undefined>;
+};
+
+function getBackgroundInternals(
+  background: WorkerBackground<Record<string, never>>,
+): WorkerBackgroundInternals {
+  return background as unknown as WorkerBackgroundInternals;
+}
+
+function prepareWorkerCommand(
+  harness: ReturnType<typeof createBackgroundHarness>,
+  opcode: 1 | 2,
+): { requestView: Int32Array; releaseRequest: () => void } {
+  const address = new SharedArrayBuffer(8);
+  const [requestAllocationPtr, requestAllocationLen] =
+    harness.allocator.block_write(
+      new Uint8Array(WORKER_REQUEST_BYTES + 3),
+      address,
+      0,
+    );
+  const requestPtr = (requestAllocationPtr + 3) & ~3;
+  const requestView = createWorkerRequestView(
+    harness.allocator.share_arrays_memory,
+    requestPtr,
+    WORKER_REQUEST_BYTES,
+  );
+  const [urlPtr, urlLen] = harness.allocator.block_write(
+    new TextEncoder().encode("fake:animal"),
+    address,
+    0,
+  );
+  const [objectPtr, objectLen] = harness.allocator.block_write(
+    new TextEncoder().encode("{}"),
+    address,
+    0,
+  );
+  Atomics.store(harness.signatureView, 0, opcode);
+  Atomics.store(harness.signatureView, 1, urlPtr);
+  Atomics.store(harness.signatureView, 2, urlLen);
+  Atomics.store(harness.signatureView, 3, 1);
+  Atomics.store(harness.signatureView, 4, objectPtr);
+  Atomics.store(harness.signatureView, 5, objectLen);
+  Atomics.store(harness.signatureView, 6, requestPtr);
+  Atomics.store(harness.signatureView, 7, WORKER_REQUEST_BYTES);
+  return {
+    requestView,
+    releaseRequest: () =>
+      harness.allocator.free(requestAllocationPtr, requestAllocationLen),
+  };
+}
+
+function createAnimalWorker(
+  harness: ReturnType<typeof createBackgroundHarness>,
+  opcode: 1 | 2 = 1,
+): {
+  bootstrap: { animal_id?: number; worker_id?: number };
+  releaseRequest: () => void;
+  requestView: Int32Array;
+  worker: FakeWorker;
+} {
+  const command = prepareWorkerCommand(harness, opcode);
+  const internals = getBackgroundInternals(harness.background);
+  if (opcode === 1) {
+    internals.create_worker(harness.signatureView);
+  } else {
+    internals.create_start_worker(harness.signatureView);
+  }
+  const worker = FakeWorker.instances.at(-1);
+  assert.ok(worker !== undefined);
+  return {
+    bootstrap: worker.postedMessages[0] as {
+      animal_id?: number;
+      worker_id?: number;
+    },
+    releaseRequest: command.releaseRequest,
+    requestView: command.requestView,
+    worker,
+  };
+}
+
+function createManagedAnimal(
+  reference: WorkerBackgroundRefObject,
+  animalId: number,
+): WASIFarmAnimal {
+  const spawner = ThreadSpawner.init_self({
+    animal_id_counter: new SharedArrayBuffer(4),
+    destroy_status: reference.destroy_status,
+    share_memory: {},
+    wasi_farm_refs_object: [],
+    worker_background_ref_object: reference,
+    worker_url: "fake:animal",
+  });
+  return createAnimalWithSpawner(spawner, animalId);
+}
+
+function createAnimalWithSpawner(
+  spawner: ThreadSpawner,
+  animalId?: number,
+): WASIFarmAnimal {
+  const animal = Object.create(WASIFarmAnimal.prototype) as WASIFarmAnimal;
+  Object.assign(animal, {
+    animal_id: animalId,
+    args: [],
+    can_thread_spawn: true,
+    env: [],
+    fd_map: [],
+    id_in_wasi_farm_ref: [],
+    inst: undefined,
+    thread_spawner: spawner,
+    wasi_farm_refs: [],
+  });
+  return animal;
 }
 
 describe("ThreadSpawner coordinator ownership", () => {
@@ -589,6 +735,522 @@ describe("ThreadSpawner coordinator ownership", () => {
     assert.strictEqual(owner.owns_worker_background_worker, true);
     assert.strictEqual(attached.owns_worker_background_worker, false);
     assert.ok(attached.create_destroyer(17) instanceof DestroyerHandle);
+  });
+});
+
+describe("WASIFarmAnimal destroy lifecycle", () => {
+  test("public destroy handles and async destroy join owner finalization", async () => {
+    installFakeWorker();
+    FakeWorker.onPostMessage = (worker) => worker.emitMessage("ready");
+    const spawner = createTestThreadSpawner("fake:coordinator");
+    await spawner.wait_worker_background_worker();
+    const animal = createAnimalWithSpawner(spawner, 7);
+    const handle = animal.init_destroyer(
+      spawner.create_destroyer().get_object(),
+    );
+    assert.ok(handle instanceof DestroyerHandle);
+
+    animal.destroy();
+    const completion: Promise<void> = animal.async_destroy();
+    assert.ok(completion instanceof Promise);
+    const internals = animal as unknown as {
+      fd_map: Array<[number, number]>;
+      id_in_wasi_farm_ref: number[];
+      inst?: unknown;
+      thread_spawner?: ThreadSpawner;
+      wasi_farm_refs: unknown[];
+    };
+    assert.strictEqual(internals.thread_spawner, spawner);
+
+    const destroyView = new Int32Array(spawner.get_object().destroy_status);
+    markDestroyed(destroyView);
+    await completion;
+    assert.strictEqual(internals.thread_spawner, undefined);
+    assert.strictEqual(internals.inst, undefined);
+    assert.deepStrictEqual(internals.wasi_farm_refs, []);
+    assert.deepStrictEqual(internals.id_in_wasi_farm_ref, []);
+    assert.deepStrictEqual(internals.fd_map, []);
+  });
+
+  test("owner IDs stay unbound while managed handles bind their assigned ID", () => {
+    installFakeWorker();
+    FakeWorker.onPostMessage = (worker) => worker.emitMessage("ready");
+    const owner = createTestThreadSpawner("fake:coordinator");
+    const attached = ThreadSpawner.init_self(owner.get_object());
+
+    assert.strictEqual(
+      (
+        owner.create_destroyer(17) as unknown as {
+          requester_animal_id?: number;
+        }
+      ).requester_animal_id,
+      undefined,
+    );
+    assert.strictEqual(
+      (
+        attached.create_destroyer(17) as unknown as {
+          requester_animal_id?: number;
+        }
+      ).requester_animal_id,
+      17,
+    );
+
+    const rootAnimal = createAnimalWithSpawner(owner, 9);
+    const managedAnimal = createAnimalWithSpawner(attached, 23);
+    const object = owner.create_destroyer().get_object();
+    assert.strictEqual(
+      (
+        rootAnimal.init_destroyer(object) as unknown as {
+          requester_animal_id?: number;
+        }
+      ).requester_animal_id,
+      undefined,
+    );
+    assert.strictEqual(
+      (
+        managedAnimal.init_destroyer(object) as unknown as {
+          requester_animal_id?: number;
+        }
+      ).requester_animal_id,
+      23,
+    );
+  });
+
+  test("a transferred destroy handle remains usable after a Worker task", async () => {
+    const spawner = createTestThreadSpawner(REAL_COORDINATOR_URL);
+    const worker = new Worker(
+      new URL("./test_workers/destroy_handle_worker.ts", import.meta.url),
+      { type: "module" },
+    );
+    try {
+      await withTimeout(
+        spawner.wait_worker_background_worker(),
+        "coordinator readiness",
+      );
+      const used = new Promise<void>((resolve, reject) => {
+        worker.onmessage = (event) => {
+          if (event.data === "destroyed") resolve();
+        };
+        worker.onerror = reject;
+      });
+      worker.postMessage(spawner.create_destroyer().get_object());
+
+      await withTimeout(used, "delayed transferred handle");
+      await withTimeout(spawner.async_destroy(), "transferred destroy");
+      assert.strictEqual(
+        readLifecycle(new Int32Array(spawner.get_object().destroy_status)),
+        WorkerLifecycle.Destroyed,
+      );
+    } finally {
+      worker.terminate();
+      await cleanupSpawner(spawner);
+    }
+  });
+
+  test("managed async destroy resolves at Drained before scheduled Closing", async () => {
+    installFakeWorker();
+    let closeCount = 0;
+    Object.defineProperty(globalThis, "close", {
+      configurable: true,
+      value: () => {
+        closeCount += 1;
+      },
+    });
+    const { background, destroyView, lockView, reference } =
+      createBackgroundHarness();
+    const requester = new FakeWorker("fake:requester");
+    const record: TestWorkerRecord = {
+      animal_id: 23,
+      retired: false,
+      worker: requester as unknown as Worker,
+      worker_id: 1,
+    };
+    const internals = getBackgroundInternals(background);
+    internals.workers = [undefined, record];
+    internals.pending_animal_workers.set(23, record);
+    internals.worker_animals.set(1, 23);
+    internals.register_handlers(record, false);
+    const animal = createManagedAnimal(reference, 23);
+
+    const completion = animal.async_destroy();
+    await completion;
+    assert.strictEqual(
+      Atomics.load(destroyView, DESTROY_REQUESTER_STATUS),
+      RequesterStatus.RequesterDrained,
+    );
+    assert.strictEqual(readRequesterAnimalId(destroyView), 23);
+    await waitFor(
+      () =>
+        Atomics.load(destroyView, DESTROY_REQUESTER_STATUS) ===
+        RequesterStatus.Closing,
+      "scheduled requester close",
+    );
+    await withTimeout(waitForDestroyTerminal(destroyView), "managed teardown");
+    assert.ok(closeCount >= 1);
+    assert.strictEqual(requester.terminateCount, 1);
+    wakeWorkerCommandActivity(lockView);
+  });
+
+  test("start workers publish assigned ready before entering the start function", async () => {
+    installFakeWorker();
+    FakeWorker.onPostMessage = (worker) => worker.emitMessage("ready");
+    const owner = createTestThreadSpawner("fake:coordinator");
+    await owner.wait_worker_background_worker();
+    const messages: Array<{ animal_id?: number; msg?: string }> = [];
+    Object.defineProperty(globalThis, "postMessage", {
+      configurable: true,
+      value: (message: { animal_id?: number; msg?: string }) => {
+        messages.push(message);
+      },
+    });
+
+    const animalPrototype = WASIFarmAnimal.prototype as unknown as {
+      mapping_fds: () => void;
+    };
+    const mappingFds = animalPrototype.mapping_fds;
+    animalPrototype.mapping_fds = function mappingTestFds(this: {
+      fd_map: Array<[number, number]>;
+    }): void {
+      this.fd_map = [];
+    };
+    try {
+      await thread_spawn_on_worker(
+        {
+          animal_id: 29,
+          args: [],
+          env: [],
+          fd_map: [],
+          sl_object: owner.get_object(),
+          start_arg: 0,
+          this_is_start: true,
+          this_is_thread_spawn: true,
+          thread_spawn_wasm: {} as WebAssembly.Module,
+          worker_background_ref:
+            owner.get_object().worker_background_ref_object,
+        },
+        async () =>
+          ({
+            exports: {
+              memory: new WebAssembly.Memory({ initial: 1 }),
+              _start: () => {
+                assert.deepStrictEqual(messages[0], {
+                  animal_id: 29,
+                  msg: "ready",
+                });
+              },
+            },
+          }) as unknown as WebAssembly.Instance,
+      );
+    } finally {
+      animalPrototype.mapping_fds = mappingFds;
+    }
+
+    assert.deepStrictEqual(messages, [
+      { animal_id: 29, msg: "ready" },
+      { animal_id: 29, msg: "done" },
+    ]);
+  });
+});
+
+describe("coordinator Animal registries", () => {
+  test("allocates both ID boundaries and reuses a retired ID", () => {
+    installFakeWorker();
+    const harness = createBackgroundHarness();
+    const internals = getBackgroundInternals(harness.background);
+    assert.strictEqual(internals.allocate_animal_id(), 0);
+    internals.next_animal_id = 2 ** 30 - 2;
+    assert.strictEqual(internals.allocate_animal_id(), 2 ** 30 - 2);
+    assert.throws(
+      () => internals.allocate_animal_id(),
+      new RangeError("no Animal IDs are available"),
+    );
+    internals.free_animal_ids.push(0);
+    assert.strictEqual(internals.allocate_animal_id(), 0);
+  });
+
+  test("pending IDs are distinct and out-of-order ready promotes by record", () => {
+    installFakeWorker();
+    const harness = createBackgroundHarness();
+    const internals = getBackgroundInternals(harness.background);
+    const first = createAnimalWorker(harness);
+    const second = createAnimalWorker(harness);
+    try {
+      assert.deepStrictEqual(
+        [first.bootstrap.animal_id, second.bootstrap.animal_id],
+        [0, 1],
+      );
+      assert.strictEqual(internals.pending_animal_workers.size, 2);
+      assert.strictEqual(internals.animal_workers.size, 0);
+
+      second.worker.emitMessage({ msg: "ready", animal_id: 1 });
+      first.worker.emitMessage({ msg: "ready", animal_id: 0 });
+
+      assert.strictEqual(
+        Atomics.load(first.requestView, WORKER_REQUEST_STATE),
+        WorkerRequestState.Ready,
+      );
+      assert.strictEqual(
+        Atomics.load(second.requestView, WORKER_REQUEST_STATE),
+        WorkerRequestState.Ready,
+      );
+      assert.strictEqual(internals.animal_workers.get(0)?.worker, first.worker);
+      assert.strictEqual(
+        internals.animal_workers.get(1)?.worker,
+        second.worker,
+      );
+      assert.strictEqual(internals.pending_animal_workers.size, 0);
+    } finally {
+      first.releaseRequest();
+      second.releaseRequest();
+    }
+  });
+
+  test("individual kill is selective, idempotent, and reuses the released ID", () => {
+    installFakeWorker();
+    const harness = createBackgroundHarness();
+    const internals = getBackgroundInternals(harness.background);
+    const first = createAnimalWorker(harness);
+    const second = createAnimalWorker(harness);
+    try {
+      first.worker.emitMessage({ msg: "ready", animal_id: 0 });
+      second.worker.emitMessage({ msg: "ready", animal_id: 1 });
+
+      internals.kill_animal(0);
+      internals.kill_animal(0);
+
+      assert.strictEqual(first.worker.terminateCount, 1);
+      assert.strictEqual(second.worker.terminateCount, 0);
+      assert.strictEqual(internals.animal_workers.has(0), false);
+      assert.strictEqual(
+        internals.animal_workers.get(1)?.worker,
+        second.worker,
+      );
+      assert.strictEqual(internals.allocate_animal_id(), 0);
+    } finally {
+      first.releaseRequest();
+      second.releaseRequest();
+    }
+  });
+
+  test("unknown and pending IDs are no-ops for individual kill", () => {
+    installFakeWorker();
+    const harness = createBackgroundHarness();
+    const internals = getBackgroundInternals(harness.background);
+    const pending = createAnimalWorker(harness);
+    try {
+      internals.kill_animal(0);
+      internals.kill_animal(999);
+      assert.strictEqual(pending.worker.terminateCount, 0);
+      assert.strictEqual(
+        internals.pending_animal_workers.get(0)?.worker,
+        pending.worker,
+      );
+    } finally {
+      pending.releaseRequest();
+    }
+  });
+
+  test("mismatched, stale, and duplicate ready cannot corrupt a reused ID", () => {
+    installFakeWorker();
+    const harness = createBackgroundHarness();
+    const internals = getBackgroundInternals(harness.background);
+    const first = createAnimalWorker(harness);
+    const second = createAnimalWorker(harness);
+    const staleHandler = first.worker.onmessage;
+    let replacement: ReturnType<typeof createAnimalWorker> | undefined;
+    try {
+      first.worker.emitMessage({ msg: "ready", animal_id: 1 });
+      assert.strictEqual(first.worker.terminateCount, 1);
+      assert.strictEqual(
+        internals.pending_animal_workers.get(1)?.worker,
+        second.worker,
+      );
+
+      replacement = createAnimalWorker(harness);
+      assert.strictEqual(replacement.bootstrap.animal_id, 0);
+      staleHandler?.({
+        data: { msg: "ready", animal_id: 0 },
+      } as MessageEvent);
+      assert.strictEqual(
+        internals.pending_animal_workers.get(0)?.worker,
+        replacement.worker,
+      );
+      assert.strictEqual(internals.free_animal_ids.includes(0), false);
+
+      second.worker.emitMessage({ msg: "ready", animal_id: 1 });
+      replacement.worker.emitMessage({ msg: "ready", animal_id: 0 });
+      replacement.worker.emitMessage({ msg: "ready", animal_id: 0 });
+      assert.strictEqual(replacement.worker.terminateCount, 1);
+      assert.strictEqual(
+        internals.animal_workers.get(1)?.worker,
+        second.worker,
+      );
+    } finally {
+      first.releaseRequest();
+      second.releaseRequest();
+      replacement?.releaseRequest();
+    }
+  });
+
+  test("constructor and postMessage failures release their reservations", () => {
+    installFakeWorker();
+    {
+      const harness = createBackgroundHarness();
+      const internals = getBackgroundInternals(harness.background);
+      const command = prepareWorkerCommand(harness, 1);
+      FakeWorker.constructorError = new Error("constructor failed");
+      internals.create_worker(harness.signatureView);
+      FakeWorker.constructorError = undefined;
+      assert.strictEqual(
+        Atomics.load(command.requestView, WORKER_REQUEST_STATE),
+        WorkerRequestState.Failed,
+      );
+      assert.deepStrictEqual(internals.free_animal_ids, [0]);
+      assert.strictEqual(internals.pending_animal_workers.size, 0);
+      command.releaseRequest();
+    }
+    {
+      const harness = createBackgroundHarness();
+      const internals = getBackgroundInternals(harness.background);
+      const command = prepareWorkerCommand(harness, 1);
+      FakeWorker.onPostMessage = () => {
+        throw new Error("postMessage failed");
+      };
+      internals.create_worker(harness.signatureView);
+      FakeWorker.onPostMessage = undefined;
+      assert.strictEqual(
+        Atomics.load(command.requestView, WORKER_REQUEST_STATE),
+        WorkerRequestState.Failed,
+      );
+      assert.deepStrictEqual(internals.free_animal_ids, [0]);
+      assert.strictEqual(internals.pending_animal_workers.size, 0);
+      command.releaseRequest();
+    }
+  });
+
+  test("done, error, and exit retire and release each sender once", () => {
+    installFakeWorker();
+    for (const message of [
+      { msg: "done", animal_id: 0 },
+      { msg: "error", animal_id: 0, error: new Error("failed") },
+      { msg: "exit", animal_id: 0, code: 9 },
+    ]) {
+      const harness = createBackgroundHarness();
+      const internals = getBackgroundInternals(harness.background);
+      const animal = createAnimalWorker(harness);
+      try {
+        animal.worker.emitMessage({ msg: "ready", animal_id: 0 });
+        const terminalHandler = animal.worker.onmessage;
+        animal.worker.emitMessage(message);
+        terminalHandler?.({ data: message } as MessageEvent);
+        assert.strictEqual(animal.worker.terminateCount, 1);
+        assert.deepStrictEqual(internals.free_animal_ids, [0]);
+      } finally {
+        animal.releaseRequest();
+      }
+    }
+  });
+
+  test("start worker stays pending until ready and uses common kill retirement", () => {
+    installFakeWorker();
+    const harness = createBackgroundHarness();
+    const internals = getBackgroundInternals(harness.background);
+    const start = createAnimalWorker(harness, 2);
+    try {
+      assert.strictEqual(start.bootstrap.animal_id, 0);
+      assert.strictEqual(
+        Atomics.load(start.requestView, WORKER_REQUEST_STATE),
+        WorkerRequestState.Pending,
+      );
+      assert.strictEqual(
+        internals.pending_animal_workers.get(0)?.worker,
+        start.worker,
+      );
+
+      start.worker.emitMessage({ msg: "ready", animal_id: 0 });
+      assert.strictEqual(
+        Atomics.load(start.requestView, WORKER_REQUEST_STATE),
+        WorkerRequestState.Ready,
+      );
+      assert.strictEqual(internals.animal_workers.get(0)?.worker, start.worker);
+      internals.kill_animal(0);
+      assert.strictEqual(start.worker.terminateCount, 1);
+      assert.strictEqual(internals.start_worker, undefined);
+      assert.deepStrictEqual(internals.free_animal_ids, [0]);
+    } finally {
+      start.releaseRequest();
+    }
+  });
+
+  test("teardown captures pending, live, start, and pending requester records", async () => {
+    installFakeWorker();
+    const { background, destroyView, lockView } = createBackgroundHarness();
+    const internals = getBackgroundInternals(background);
+    const makeRecord = (
+      animalId: number,
+      workerId: number,
+    ): TestWorkerRecord => ({
+      animal_id: animalId,
+      retired: false,
+      worker: new FakeWorker(`fake:${animalId}`) as unknown as Worker,
+      worker_id: workerId,
+    });
+    const live = makeRecord(0, 1);
+    const requester = makeRecord(1, 2);
+    const pending = makeRecord(2, 3);
+    const start = makeRecord(3, 0);
+    internals.workers = [undefined, live, requester, pending];
+    internals.start_worker = start;
+    internals.animal_workers.set(0, live);
+    internals.pending_animal_workers.set(1, requester);
+    internals.pending_animal_workers.set(2, pending);
+    internals.pending_animal_workers.set(3, start);
+    for (const record of [live, requester, pending, start]) {
+      internals.worker_animals.set(record.worker_id, record.animal_id);
+      internals.register_handlers(record, record === start);
+    }
+
+    beginDestroy(destroyView, 1);
+    wakeWorkerCommandActivity(lockView);
+    await waitFor(
+      () =>
+        Atomics.load(destroyView, DESTROY_REQUESTER_STATUS) ===
+        RequesterStatus.RequesterDrained,
+      "pending requester drained",
+    );
+    assert.strictEqual(
+      (live.worker as unknown as FakeWorker).terminateCount,
+      1,
+    );
+    assert.strictEqual(
+      (pending.worker as unknown as FakeWorker).terminateCount,
+      1,
+    );
+    assert.strictEqual(
+      (start.worker as unknown as FakeWorker).terminateCount,
+      1,
+    );
+    assert.strictEqual(
+      (requester.worker as unknown as FakeWorker).terminateCount,
+      0,
+    );
+    (requester.worker as unknown as FakeWorker).emitMessage({
+      msg: "exit",
+      animal_id: 1,
+      code: 1,
+    });
+    await withTimeout(
+      waitForDestroyTerminal(destroyView),
+      "pending requester close",
+    );
+    assert.strictEqual(
+      (requester.worker as unknown as FakeWorker).terminateCount,
+      1,
+    );
+    assert.deepStrictEqual(
+      [...internals.free_animal_ids].sort((a, b) => a - b),
+      [0, 1, 2, 3],
+    );
   });
 });
 
@@ -1012,6 +1674,8 @@ describe("WorkerBackground teardown races", () => {
     const { background, destroyView, lockView } = createBackgroundHarness();
     const requester = new FakeWorker("fake:requester");
     const record: TestWorkerRecord = {
+      animal_id: 23,
+      retired: false,
       worker: requester as unknown as Worker,
       worker_id: 1,
     };
@@ -1047,7 +1711,13 @@ describe("WorkerBackground teardown races", () => {
       "requester drained",
     );
     const epoch = Atomics.load(destroyView, DESTROY_WAKE_EPOCH);
-    requester.emitMessage({ msg: "exit", code: 1 });
+    requester.emitMessage({ msg: "exit", animal_id: 24, code: 1 });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    assert.strictEqual(
+      Atomics.load(destroyView, DESTROY_REQUESTER_STATUS),
+      RequesterStatus.RequesterDrained,
+    );
+    requester.emitMessage({ msg: "exit", animal_id: 23, code: 1 });
     await withTimeout(waitForDestroyTerminal(destroyView), "requester closing");
 
     assert.strictEqual(
@@ -1066,6 +1736,8 @@ describe("WorkerBackground teardown races", () => {
     const request = new Int32Array(new SharedArrayBuffer(WORKER_REQUEST_BYTES));
     const worker = new FakeWorker("fake:invalid");
     const record: TestWorkerRecord = {
+      animal_id: 1,
+      retired: false,
       worker: worker as unknown as Worker,
       worker_id: 1,
       request_view: request,

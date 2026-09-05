@@ -25,6 +25,7 @@ import {
   createWorkerRequestView,
   finishRuntimeCompletion,
   RuntimeCompletion,
+  WORKER_REQUEST_STATE,
   WorkerRequestFailure,
   WorkerRequestState,
 } from "../worker_request.js";
@@ -44,9 +45,11 @@ import {
 import type { WorkerBackgroundRefObject } from "./worker_export.js";
 
 type WorkerRecord = {
-  worker: Worker;
+  worker?: Worker;
   request_view?: Int32Array;
   worker_id: number;
+  animal_id: number;
+  retired: boolean;
 };
 
 type WorkerCommand = {
@@ -70,6 +73,11 @@ export class WorkerBackground<T> {
   private listen_holder: Promise<void>;
   private start_worker?: WorkerRecord;
   private animal_workers = new Map<number, WorkerRecord>();
+  private pending_animal_workers = new Map<number, WorkerRecord>();
+  private worker_animals = new Map<number, number>();
+  private next_animal_id = 0;
+  private free_animal_ids: number[] = [];
+  private terminated_records = new WeakSet<WorkerRecord>();
   private teardown_promise?: Promise<void>;
   private teardown_failure?: WorkerDestroyFailureCode;
   private teardown_requester?: WorkerRecord;
@@ -126,6 +134,19 @@ export class WorkerBackground<T> {
     return this.workers.length - 1;
   }
 
+  private allocate_animal_id(): number {
+    const reused = this.free_animal_ids.pop();
+    if (reused !== undefined) return reused;
+    if (this.next_animal_id > 2 ** 30 - 2) {
+      throw new RangeError("no Animal IDs are available");
+    }
+    return this.next_animal_id++;
+  }
+
+  private release_animal_id(animalId: number): void {
+    this.free_animal_ids.push(animalId);
+  }
+
   private ref(): WorkerBackgroundRefObject {
     return {
       allocator: this.allocator.get_object(),
@@ -135,22 +156,59 @@ export class WorkerBackground<T> {
     };
   }
 
-  private remove_record(record: WorkerRecord): void {
+  private terminate_worker(record: WorkerRecord): void {
+    if (this.terminated_records.has(record)) return;
+    const worker = record.worker;
+    if (worker === undefined) return;
+    this.terminated_records.add(record);
+    this.detach_handlers(record);
+    worker.terminate();
+  }
+
+  private retire_record(record: WorkerRecord, terminate = true): boolean {
+    if (record.retired) return false;
+    record.retired = true;
+    let ownsIdentity = false;
     if (record.worker_id > 0 && this.workers[record.worker_id] === record) {
       this.workers[record.worker_id] = undefined;
+      ownsIdentity = true;
     }
     if (record.worker_id === 0 && this.start_worker === record) {
       this.start_worker = undefined;
+      ownsIdentity = true;
     }
-    for (const [animalId, animalRecord] of this.animal_workers) {
-      if (animalRecord === record) this.animal_workers.delete(animalId);
+    if (this.pending_animal_workers.get(record.animal_id) === record) {
+      this.pending_animal_workers.delete(record.animal_id);
+      ownsIdentity = true;
     }
+    if (this.animal_workers.get(record.animal_id) === record) {
+      this.animal_workers.delete(record.animal_id);
+      ownsIdentity = true;
+    }
+    if (
+      ownsIdentity &&
+      this.worker_animals.get(record.worker_id) === record.animal_id
+    ) {
+      this.worker_animals.delete(record.worker_id);
+    }
+    if (
+      ownsIdentity &&
+      !this.pending_animal_workers.has(record.animal_id) &&
+      !this.animal_workers.has(record.animal_id)
+    ) {
+      this.release_animal_id(record.animal_id);
+    }
+    if (terminate) this.terminate_worker(record);
+    return ownsIdentity;
   }
 
   private is_active_record(record: WorkerRecord): boolean {
-    return record.worker_id === 0
-      ? this.start_worker === record
-      : this.workers[record.worker_id] === record;
+    return (
+      !record.retired &&
+      (record.worker_id === 0
+        ? this.start_worker === record
+        : this.workers[record.worker_id] === record)
+    );
   }
 
   private mark_inactive_requester_closing(record: WorkerRecord): boolean {
@@ -160,9 +218,11 @@ export class WorkerBackground<T> {
   }
 
   private detach_handlers(record: WorkerRecord): void {
-    record.worker.onmessage = null;
-    record.worker.onerror = null;
-    record.worker.onmessageerror = null;
+    const worker = record.worker;
+    if (worker === undefined) return;
+    worker.onmessage = null;
+    worker.onerror = null;
+    worker.onmessageerror = null;
   }
 
   private terminate_registered_workers(): void {
@@ -171,6 +231,10 @@ export class WorkerBackground<T> {
       if (record !== undefined) records.add(record);
     }
     if (this.start_worker !== undefined) records.add(this.start_worker);
+    for (const record of this.pending_animal_workers.values()) {
+      records.add(record);
+    }
+    for (const record of this.animal_workers.values()) records.add(record);
     const destroyView = new Int32Array(this.destroy_status);
     for (const record of records) {
       const requestView = record.request_view;
@@ -184,12 +248,13 @@ export class WorkerBackground<T> {
           destroyView,
         );
       }
-      this.detach_handlers(record);
-      record.worker.terminate();
+      this.retire_record(record);
     }
     this.workers = [undefined];
     this.start_worker = undefined;
     this.animal_workers.clear();
+    this.pending_animal_workers.clear();
+    this.worker_animals.clear();
   }
 
   private cancel_runtime(): void {
@@ -254,18 +319,18 @@ export class WorkerBackground<T> {
     const requester =
       requesterId === undefined
         ? undefined
-        : this.animal_workers.get(requesterId);
+        : (this.animal_workers.get(requesterId) ??
+          this.pending_animal_workers.get(requesterId));
     const records = new Set<WorkerRecord>();
     for (const record of this.workers) {
       if (record !== undefined) records.add(record);
     }
     if (this.start_worker !== undefined) records.add(this.start_worker);
+    for (const record of this.pending_animal_workers.values()) {
+      records.add(record);
+    }
     for (const record of this.animal_workers.values()) records.add(record);
     this.teardown_requester = requester;
-
-    this.workers = [undefined];
-    this.start_worker = undefined;
-    this.animal_workers.clear();
 
     for (const record of records) {
       const requestView = record.request_view;
@@ -283,15 +348,17 @@ export class WorkerBackground<T> {
           this.record_teardown_error(error);
         }
       }
-      if (record !== requester) {
-        try {
-          this.detach_handlers(record);
-          record.worker.terminate();
-        } catch (error) {
-          this.record_teardown_error(error);
-        }
+      try {
+        this.retire_record(record, record !== requester);
+      } catch (error) {
+        this.record_teardown_error(error);
       }
     }
+    this.workers = [undefined];
+    this.start_worker = undefined;
+    this.animal_workers.clear();
+    this.pending_animal_workers.clear();
+    this.worker_animals.clear();
 
     try {
       this.cancel_runtime();
@@ -312,8 +379,7 @@ export class WorkerBackground<T> {
         this.record_teardown_error(error);
       }
       try {
-        this.detach_handlers(requester);
-        requester.worker.terminate();
+        this.terminate_worker(requester);
       } catch (error) {
         this.record_teardown_error(error);
       }
@@ -340,27 +406,58 @@ export class WorkerBackground<T> {
     globalThis.close();
   }
 
-  private complete_request_ready(record: WorkerRecord): boolean {
+  private complete_request_ready(
+    record: WorkerRecord,
+    animalId: unknown,
+  ): boolean {
     if (!this.is_active_record(record)) {
-      record.worker.terminate();
+      this.retire_record(record);
       return false;
     }
     const requestView = record.request_view;
-    record.request_view = undefined;
-    if (requestView === undefined) return false;
-
     const destroyView = new Int32Array(this.destroy_status);
     const running = readLifecycle(destroyView) === WorkerLifecycle.Running;
+    const validId = Number.isInteger(animalId) && animalId === record.animal_id;
+    const pending =
+      requestView !== undefined &&
+      Atomics.load(requestView, WORKER_REQUEST_STATE) ===
+        WorkerRequestState.Pending &&
+      this.pending_animal_workers.get(record.animal_id) === record;
+    if (!validId || !pending) {
+      if (requestView !== undefined) {
+        this.complete_request_failure(record, WorkerRequestFailure.Protocol);
+      } else {
+        this.retire_record(record);
+      }
+      return false;
+    }
+
+    if (!running) {
+      record.request_view = undefined;
+      completeWorkerRequest(
+        requestView,
+        WorkerRequestState.Cancelled,
+        WorkerRequestFailure.Destroyed,
+        record.worker_id,
+        destroyView,
+      );
+      this.retire_record(record);
+      return false;
+    }
+
+    this.pending_animal_workers.delete(record.animal_id);
+    this.animal_workers.set(record.animal_id, record);
+    this.worker_animals.set(record.worker_id, record.animal_id);
+    record.request_view = undefined;
     const accepted = completeWorkerRequest(
       requestView,
-      running ? WorkerRequestState.Ready : WorkerRequestState.Cancelled,
-      running ? WorkerRequestFailure.None : WorkerRequestFailure.Destroyed,
+      WorkerRequestState.Ready,
+      WorkerRequestFailure.None,
       record.worker_id,
       destroyView,
     );
-    if (!accepted || !running) {
-      this.remove_record(record);
-      record.worker.terminate();
+    if (!accepted) {
+      this.retire_record(record);
       return false;
     }
     return true;
@@ -371,22 +468,24 @@ export class WorkerBackground<T> {
     failure: WorkerRequestFailure,
   ): void {
     if (!this.is_active_record(record)) {
-      record.worker.terminate();
+      this.retire_record(record);
       return;
     }
     const requestView = record.request_view;
     record.request_view = undefined;
-    if (requestView !== undefined) {
-      completeWorkerRequest(
-        requestView,
-        WorkerRequestState.Failed,
-        failure,
-        record.worker_id,
-        new Int32Array(this.destroy_status),
-      );
+    try {
+      if (requestView !== undefined) {
+        completeWorkerRequest(
+          requestView,
+          WorkerRequestState.Failed,
+          failure,
+          record.worker_id,
+          new Int32Array(this.destroy_status),
+        );
+      }
+    } finally {
+      this.retire_record(record);
     }
-    this.remove_record(record);
-    record.worker.terminate();
   }
 
   private publish_runtime_exit(code: number): void {
@@ -632,21 +731,26 @@ export class WorkerBackground<T> {
   }
 
   private register_handlers(record: WorkerRecord, isStart: boolean): void {
-    record.worker.onmessage = (event: MessageEvent) => {
+    const worker = record.worker;
+    if (worker === undefined) return;
+    worker.onmessage = (event: MessageEvent) => {
       const data = event.data;
       if (!this.is_active_record(record)) {
         if (this.teardown_requester === record) {
+          const message =
+            data !== null && typeof data === "object"
+              ? (data as { animal_id?: number; msg?: string })
+              : undefined;
           if (
-            data !== null &&
-            typeof data === "object" &&
-            ((data as { msg?: string }).msg === "error" ||
-              (data as { msg?: string }).msg === "exit")
+            (message?.msg === "error" || message?.msg === "exit") &&
+            Number.isInteger(message.animal_id) &&
+            message.animal_id === record.animal_id
           ) {
             this.mark_inactive_requester_closing(record);
           }
           return;
         }
-        record.worker.terminate();
+        this.terminate_worker(record);
         return;
       }
       if (data === null || typeof data !== "object") {
@@ -663,11 +767,25 @@ export class WorkerBackground<T> {
         error?: unknown;
         msg?: string;
       };
-      if (message.msg === "ready") {
-        if (!isStart && !this.complete_request_ready(record)) return;
-        if (message.animal_id !== undefined) {
-          this.animal_workers.set(message.animal_id, record);
+      const isStandardMessage =
+        message.msg === "ready" ||
+        message.msg === "done" ||
+        message.msg === "error" ||
+        message.msg === "exit";
+      if (
+        isStandardMessage &&
+        (!Number.isInteger(message.animal_id) ||
+          message.animal_id !== record.animal_id)
+      ) {
+        if (record.request_view !== undefined) {
+          this.complete_request_failure(record, WorkerRequestFailure.Protocol);
+        } else {
+          this.retire_record(record);
         }
+        return;
+      }
+      if (message.msg === "ready") {
+        this.complete_request_ready(record, message.animal_id);
         return;
       }
 
@@ -675,8 +793,7 @@ export class WorkerBackground<T> {
         if (record.request_view !== undefined) {
           this.complete_request_failure(record, WorkerRequestFailure.Protocol);
         } else {
-          this.remove_record(record);
-          record.worker.terminate();
+          this.retire_record(record);
         }
         if (isStart) {
           this.terminate_registered_workers();
@@ -709,10 +826,10 @@ export class WorkerBackground<T> {
       this.fail_runtime(new Error("unknown worker message"));
     };
 
-    record.worker.onerror = (event) => {
+    worker.onerror = (event) => {
       if (!this.is_active_record(record)) {
         if (this.mark_inactive_requester_closing(record)) return;
-        record.worker.terminate();
+        this.terminate_worker(record);
         return;
       }
       event.preventDefault();
@@ -721,10 +838,10 @@ export class WorkerBackground<T> {
       }
       this.fail_runtime(new Error(event.message));
     };
-    record.worker.onmessageerror = () => {
+    worker.onmessageerror = () => {
       if (!this.is_active_record(record)) {
         if (this.mark_inactive_requester_closing(record)) return;
-        record.worker.terminate();
+        this.terminate_worker(record);
         return;
       }
       if (record.request_view !== undefined) {
@@ -757,16 +874,14 @@ export class WorkerBackground<T> {
       return;
     }
 
-    let worker: Worker;
+    let animalId: number;
     try {
-      worker = new Worker(command.url, {
-        type: Atomics.load(signatureView, 3) === 1 ? "module" : "classic",
-      });
+      animalId = this.allocate_animal_id();
     } catch (error) {
       completeWorkerRequest(
         command.requestView,
         WorkerRequestState.Failed,
-        WorkerRequestFailure.ScriptLoad,
+        WorkerRequestFailure.AnimalConstruction,
         0,
         new Int32Array(this.destroy_status),
       );
@@ -776,16 +891,33 @@ export class WorkerBackground<T> {
 
     const workerId = this.assign_worker_id();
     const record: WorkerRecord = {
-      worker,
+      animal_id: animalId,
       request_view: command.requestView,
+      retired: false,
       worker_id: workerId,
     };
     this.workers[workerId] = record;
+    this.pending_animal_workers.set(animalId, record);
+    this.worker_animals.set(workerId, animalId);
+
+    let worker: Worker;
+    try {
+      worker = new Worker(command.url, {
+        type: Atomics.load(signatureView, 3) === 1 ? "module" : "classic",
+      });
+    } catch (error) {
+      this.complete_request_failure(record, WorkerRequestFailure.ScriptLoad);
+      this.fail_runtime(error);
+      return;
+    }
+
+    record.worker = worker;
     this.register_handlers(record, false);
     try {
       worker.postMessage({
         ...this.override_object,
         ...command.obj,
+        animal_id: animalId,
         worker_id: workerId,
         worker_background_ref: this.ref(),
       });
@@ -820,16 +952,14 @@ export class WorkerBackground<T> {
       return;
     }
 
-    let worker: Worker;
+    let animalId: number;
     try {
-      worker = new Worker(command.url, {
-        type: Atomics.load(signatureView, 3) === 1 ? "module" : "classic",
-      });
+      animalId = this.allocate_animal_id();
     } catch (error) {
       completeWorkerRequest(
         command.requestView,
         WorkerRequestState.Failed,
-        WorkerRequestFailure.ScriptLoad,
+        WorkerRequestFailure.AnimalConstruction,
         0,
         new Int32Array(this.destroy_status),
       );
@@ -838,16 +968,33 @@ export class WorkerBackground<T> {
     }
 
     const record: WorkerRecord = {
-      worker,
+      animal_id: animalId,
       request_view: command.requestView,
+      retired: false,
       worker_id: 0,
     };
     this.start_worker = record;
+    this.pending_animal_workers.set(animalId, record);
+    this.worker_animals.set(0, animalId);
+
+    let worker: Worker;
+    try {
+      worker = new Worker(command.url, {
+        type: Atomics.load(signatureView, 3) === 1 ? "module" : "classic",
+      });
+    } catch (error) {
+      this.complete_request_failure(record, WorkerRequestFailure.ScriptLoad);
+      this.fail_runtime(error);
+      return;
+    }
+
+    record.worker = worker;
     this.register_handlers(record, true);
     try {
       worker.postMessage({
         ...this.override_object,
         ...command.obj,
+        animal_id: animalId,
         worker_background_ref: this.ref(),
       });
     } catch (error) {
@@ -858,7 +1005,18 @@ export class WorkerBackground<T> {
       this.fail_runtime(error);
       return;
     }
-    this.complete_request_ready(record);
+  }
+
+  private kill_animal(animalId: number): void {
+    if (
+      readLifecycle(new Int32Array(this.destroy_status)) !==
+      WorkerLifecycle.Running
+    ) {
+      return;
+    }
+    const record = this.animal_workers.get(animalId);
+    if (record === undefined) return;
+    this.retire_record(record);
   }
 
   private process_claimed_command(signatureView: Int32Array): void {
@@ -874,16 +1032,7 @@ export class WorkerBackground<T> {
         break;
       case 4: {
         const animalId = Atomics.load(signatureView, 1);
-        const record = this.animal_workers.get(animalId);
-        if (record !== undefined) {
-          record.worker.postMessage({
-            msg: "kill_animal",
-            animal_id: animalId,
-          });
-          if (this.animal_workers.get(animalId) === record) {
-            this.animal_workers.delete(animalId);
-          }
-        }
+        this.kill_animal(animalId);
         break;
       }
       default:

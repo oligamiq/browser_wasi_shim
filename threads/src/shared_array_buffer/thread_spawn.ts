@@ -336,11 +336,18 @@ export class ThreadSpawner {
   }
 
   create_destroyer(requesterAnimalId?: number): DestroyerHandle {
+    const requester = this.is_managed_worker_context()
+      ? requesterAnimalId
+      : undefined;
     return new DestroyerHandle(
       this.worker_background_ref,
       this.destroy_status,
-      requesterAnimalId,
+      requester,
     );
+  }
+
+  is_managed_worker_context(): boolean {
+    return !this.owns_worker_background_worker;
   }
 
   /// This is atomic
@@ -480,7 +487,10 @@ export class ThreadSpawner {
     }
 
     const destroyView = new Int32Array(this.destroy_status);
-    if (beginDestroy(destroyView, requesterAnimalId)) {
+    const requester = this.is_managed_worker_context()
+      ? requesterAnimalId
+      : undefined;
+    if (beginDestroy(destroyView, requester)) {
       this.worker_background_ref.notify_destroy();
     }
     if (!this.worker_background_ready_settled) {
@@ -556,6 +566,7 @@ export const thread_spawn_on_worker = async (
     env: Array<string>;
     fd_map: [number, number][];
     this_is_start?: boolean;
+    animal_id: number;
   },
   instantiate: (
     thread_spawn_wasm: WebAssembly.Module,
@@ -608,6 +619,8 @@ export const thread_spawn_on_worker = async (
       worker_background_ref,
     );
 
+    const { animal_id: animalId } = msg;
+
     if (msg.this_is_start) {
       const wasi = new WASIFarmAnimal(
         sl_object.wasi_farm_refs_object,
@@ -620,6 +633,7 @@ export const thread_spawn_on_worker = async (
         },
         override_fd_map,
         thread_spawner,
+        animalId,
       );
 
       callback(wasi);
@@ -632,6 +646,11 @@ export const thread_spawn_on_worker = async (
         wasi_snapshot_preview1: wasi.wasiImport,
       });
 
+      globalThis.postMessage({
+        msg: "ready",
+        animal_id: animalId,
+      });
+
       try {
         wasi.start_only(
           inst as unknown as {
@@ -642,12 +661,13 @@ export const thread_spawn_on_worker = async (
           },
         );
       } catch (e) {
-        check_error(e, "main");
+        check_error(e, "main", animalId);
         return wasi;
       }
 
       globalThis.postMessage({
         msg: "done",
+        animal_id: animalId,
       });
 
       return wasi;
@@ -668,6 +688,7 @@ export const thread_spawn_on_worker = async (
       },
       override_fd_map,
       thread_spawner,
+      animalId,
     );
 
     callback(wasi);
@@ -682,6 +703,7 @@ export const thread_spawn_on_worker = async (
 
     globalThis.postMessage({
       msg: "ready",
+      animal_id: animalId,
     });
 
     try {
@@ -698,24 +720,30 @@ export const thread_spawn_on_worker = async (
       );
     } catch (e) {
       // biome-ignore lint/style/noNonNullAssertion: <explanation>
-      check_error(e, thread_id!);
+      check_error(e, thread_id!, animalId);
       return wasi;
     }
 
     globalThis.postMessage({
       msg: "done",
+      animal_id: animalId,
     });
 
     return wasi;
   }
 };
 
-function check_error(e: unknown, thread_id: number | string): void {
+function check_error(
+  e: unknown,
+  thread_id: number | string,
+  animalId: number,
+): void {
   let e_alt: Error | undefined;
 
   if (e instanceof WASIProcExit) {
     globalThis.postMessage({
       msg: "exit",
+      animal_id: animalId,
       code: e.code,
     });
 
@@ -751,6 +779,7 @@ function check_error(e: unknown, thread_id: number | string): void {
 
   globalThis.postMessage({
     msg: "error",
+    animal_id: animalId,
     error: e_alt,
   });
 }

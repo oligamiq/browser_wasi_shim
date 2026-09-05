@@ -1,3 +1,3 @@
-globalThis.onmessage = () => {
-  globalThis.postMessage({ msg: "ready", animal_id: 0 });
+globalThis.onmessage = (event: MessageEvent<{ animal_id: number }>) => {
+  globalThis.postMessage({ msg: "ready", animal_id: event.data.animal_id });
 };

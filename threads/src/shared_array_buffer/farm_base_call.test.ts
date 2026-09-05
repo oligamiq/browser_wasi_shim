@@ -179,7 +179,10 @@ test("duplicate fd mappings are ignored", async () => {
 });
 
 type DestroyScopeAnimal = WASIFarmAnimal & {
-  thread_spawner?: { destroy(): void };
+  thread_spawner?: {
+    destroy(requesterAnimalId?: number): void;
+    is_managed_worker_context(): boolean;
+  };
   wasi_farm_refs: Array<{ destroy_park(): void }>;
   id_in_wasi_farm_ref: number[];
   fd_map: Array<[number, number] | undefined>;
@@ -187,7 +190,10 @@ type DestroyScopeAnimal = WASIFarmAnimal & {
 
 function createDestroyScopeAnimal(events: string[]): WASIFarmAnimal {
   return Object.assign(Object.create(WASIFarmAnimal.prototype), {
-    thread_spawner: { destroy: () => events.push("animal") },
+    thread_spawner: {
+      destroy: () => events.push("animal"),
+      is_managed_worker_context: () => false,
+    },
     wasi_farm_refs: [
       { destroy_park: () => events.push("park-0") },
       { destroy_park: () => events.push("park-1") },

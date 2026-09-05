@@ -1,5 +1,8 @@
 import { WASIProcExit, wasi } from "@bjorn3/browser_wasi_shim";
-import type { DestroyerHandle } from "./destroyer_handle.ts";
+import {
+  DestroyerHandle,
+  type DestroyerHandleObject,
+} from "./destroyer_handle.ts";
 import type { WASIFarmRef, WASIFarmRefObject } from "./ref.ts";
 import type { FdCloseSender } from "./sender.ts";
 import type { WASIFarmRefUseArrayBufferObject } from "./shared_array_buffer/index.ts";
@@ -398,7 +401,34 @@ export class WASIFarmAnimal {
     if (!this.thread_spawner) {
       throw new Error("You should enable thread_spawn to use create_destroyer");
     }
-    return this.thread_spawner?.create_destroyer();
+    return this.thread_spawner.create_destroyer(this.animal_id);
+  }
+
+  init_destroyer(obj: DestroyerHandleObject): DestroyerHandle {
+    if (!this.thread_spawner || this.animal_id === undefined) {
+      throw new Error("thread spawner is not available");
+    }
+    return this.thread_spawner.is_managed_worker_context()
+      ? DestroyerHandle.init_bound(obj, this.animal_id)
+      : DestroyerHandle.init_self(obj);
+  }
+
+  async async_destroy(): Promise<void> {
+    const spawner = this.thread_spawner;
+    try {
+      if (spawner !== undefined) {
+        const requester = spawner.is_managed_worker_context()
+          ? this.animal_id
+          : undefined;
+        await spawner.async_destroy(requester);
+      }
+    } finally {
+      this.inst = undefined;
+      this.wasi_farm_refs = [];
+      this.id_in_wasi_farm_ref = [];
+      this.fd_map = [];
+      this.thread_spawner = undefined;
+    }
   }
 
   /**
@@ -408,15 +438,18 @@ export class WASIFarmAnimal {
    * after the first call has cleared the Animal's owned state.
    */
   destroy(): void {
-    if (this.thread_spawner) {
-      this.thread_spawner.destroy();
+    const spawner = this.thread_spawner;
+    if (spawner !== undefined) {
+      const requester = spawner.is_managed_worker_context()
+        ? this.animal_id
+        : undefined;
+      spawner.destroy(requester);
     }
 
     this.inst = undefined;
     this.wasi_farm_refs = [];
     this.id_in_wasi_farm_ref = [];
     this.fd_map = [];
-    this.thread_spawner = undefined;
   }
 
   /**
@@ -497,6 +530,7 @@ export class WASIFarmAnimal {
     } = {},
     override_fd_maps?: Array<number[]>,
     thread_spawner?: ThreadSpawner,
+    assigned_animal_id?: number,
   ) {
     let wasi_farm_refs_tmp: WASIFarmRefObject[];
     if (Array.isArray(wasi_farm_refs)) {
@@ -557,7 +591,14 @@ export class WASIFarmAnimal {
           options.worker_background_worker_url,
         );
       }
-      this.animal_id = this.thread_spawner.generate_animal_id();
+      if (this.thread_spawner.is_managed_worker_context()) {
+        if (assigned_animal_id === undefined) {
+          throw new Error("assigned animal ID is not defined");
+        }
+        this.animal_id = assigned_animal_id;
+      } else {
+        this.animal_id = this.thread_spawner.generate_animal_id();
+      }
     }
 
     this.mapping_fds(this.wasi_farm_refs, override_fd_maps);
@@ -1426,9 +1467,9 @@ export class WASIFarmAnimal {
 
         // Perform the wait
         const endTime =
-          ((s.flags & wasi.SUBCLOCKFLAGS_SUBSCRIPTION_CLOCK_ABSTIME) !== 0
+          (s.flags & wasi.SUBCLOCKFLAGS_SUBSCRIPTION_CLOCK_ABSTIME) !== 0
             ? timeout
-            : getNow() + timeout) - s.precision;
+            : getNow() + timeout;
         // Recalculate remaining time right before blocking to account for
         // overhead incurred during subscription parsing and clock selection.
         const remainingNs = endTime - getNow();
