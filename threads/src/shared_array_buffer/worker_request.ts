@@ -139,6 +139,22 @@ export function claimRuntimeCompletion(view: Int32Array): boolean {
   );
 }
 
+export function cancelRuntimeCompletion(view: Int32Array): boolean {
+  validateSharedView(view, WORKER_REQUEST_BYTES, "runtime completion view");
+  if (
+    Atomics.compareExchange(
+      view,
+      RUNTIME_COMPLETION_STATE,
+      RuntimeCompletion.Waiting,
+      RuntimeCompletion.Cancelled,
+    ) !== RuntimeCompletion.Waiting
+  ) {
+    return false;
+  }
+  Atomics.notify(view, RUNTIME_COMPLETION_STATE);
+  return true;
+}
+
 export function finishRuntimeCompletion(
   view: Int32Array,
   state:

@@ -222,7 +222,10 @@ export class ThreadSpawner {
         void this.worker_background_ref
           .recover_failed_coordinator_command()
           .catch((commandError) => console.error(commandError))
-          .finally(() => markDestroyFailed(destroyView, code));
+          .finally(() => {
+            markDestroyFailed(destroyView, code);
+            this.worker_background_ref.cancel_runtime_completion();
+          });
       };
 
       let coordinator: Worker;

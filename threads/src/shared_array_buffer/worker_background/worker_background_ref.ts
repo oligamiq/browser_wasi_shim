@@ -9,6 +9,7 @@ import {
   WorkerLifecycle,
 } from "../worker_lifecycle.ts";
 import {
+  cancelRuntimeCompletion,
   claimRuntimeCompletion,
   completeWorkerRequest,
   createWorkerRequestView,
@@ -511,6 +512,16 @@ export class WorkerBackgroundRef {
     }
     Atomics.store(notify_view, 1, code);
     finishRuntimeCompletion(notify_view, RuntimeCompletion.Exit);
+  }
+
+  cancel_runtime_completion(): boolean {
+    return cancelRuntimeCompletion(
+      new Int32Array(
+        this.lock,
+        WORKER_RUNTIME_COMPLETION_OFFSET_BYTES,
+        WORKER_RUNTIME_COMPLETION_WORDS,
+      ),
+    );
   }
 
   async async_wait_done_or_error(): Promise<number> {

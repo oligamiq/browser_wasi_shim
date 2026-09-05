@@ -337,6 +337,64 @@ describe("ThreadSpawner coordinator ownership", () => {
     assert.strictEqual(error.code, WorkerDestroyFailureCode.CoordinatorRuntime);
   });
 
+  test("coordinator failure settles a runtime waiter with its stable failure", async () => {
+    installFakeWorker();
+    FakeWorker.onPostMessage = (worker) => worker.emitMessage("ready");
+    const spawner = createTestThreadSpawner("fake:coordinator");
+    await spawner.wait_worker_background_worker();
+    const completion = new Int32Array(
+      spawner.get_object().worker_background_ref_object.lock,
+      12,
+      3,
+    );
+    const runtimeWait = withTimeout(
+      spawner.async_wait_done_or_error(),
+      "coordinator failure runtime completion",
+      250,
+    );
+
+    FakeWorker.instances[0]?.emitError("runtime failed with waiter");
+
+    const [destroyError, runtimeError] = await Promise.all([
+      captureDestroyError(spawner.async_destroy()),
+      captureDestroyError(runtimeWait),
+    ]);
+    assert.strictEqual(
+      destroyError.code,
+      WorkerDestroyFailureCode.CoordinatorRuntime,
+    );
+    assert.strictEqual(runtimeError.code, destroyError.code);
+    assert.strictEqual(
+      Atomics.load(completion, 0),
+      RuntimeCompletion.Cancelled,
+    );
+  });
+
+  test("coordinator failure preserves an existing runtime terminal result", async () => {
+    installFakeWorker();
+    FakeWorker.onPostMessage = (worker) => worker.emitMessage("ready");
+    const spawner = createTestThreadSpawner("fake:coordinator");
+    await spawner.wait_worker_background_worker();
+    const completion = new Int32Array(
+      spawner.get_object().worker_background_ref_object.lock,
+      12,
+      3,
+    );
+    spawner.done_notify(37);
+    const runtimeResult = spawner.async_wait_done_or_error();
+
+    FakeWorker.instances[0]?.emitError("runtime failed after completion");
+
+    const destroyError = await captureDestroyError(spawner.async_destroy());
+    assert.strictEqual(
+      destroyError.code,
+      WorkerDestroyFailureCode.CoordinatorRuntime,
+    );
+    assert.strictEqual(await runtimeResult, 37);
+    assert.strictEqual(Atomics.load(completion, 0), RuntimeCompletion.Exit);
+    assert.strictEqual(Atomics.load(completion, 1), 37);
+  });
+
   test("coordinator errors remain fatal after destroy starts", async () => {
     installFakeWorker();
     FakeWorker.onPostMessage = (worker) => worker.emitMessage("ready");
