@@ -5,7 +5,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 const old_code = readFileSync(
   "./dist/workers/worker_background_worker.js",
   "utf8",
-);
+).replace("export { WorkerBackground as WorkerBackground };", "");
 
 const { code } = await swc.minify(old_code, {
   compress: {
@@ -45,9 +45,11 @@ writeFileSync(
   "utf8",
 );
 
-const wrapper_code_js = `export default function() {
+const wrapper_code_js = `// biome-ignore format: generated
+export default function() {
     ${code}
-}`;
+}
+`;
 
 writeFileSync(
   "./src/shared_array_buffer/worker_background/worker_background_worker_minify.js",

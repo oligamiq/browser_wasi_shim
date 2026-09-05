@@ -24,7 +24,29 @@ import {
   WorkerBackgroundRef,
 } from "./worker_background/index.ts";
 import { WorkerBackgroundRefObjectConstructor } from "./worker_background/worker_export.ts";
-import { createDestroyStatus } from "./worker_lifecycle.ts";
+import {
+  beginDestroy,
+  createDestroyStatus,
+  markDestroyFailed,
+  readLifecycle,
+  waitForDestroyTerminal,
+  WorkerDestroyError,
+  WorkerDestroyFailureCode,
+  WorkerLifecycle,
+} from "./worker_lifecycle.ts";
+
+function coordinatorErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof error.message === "string"
+  ) {
+    return error.message;
+  }
+  return String(error);
+}
 
 /**
  * Represents the serialized state of a ThreadSpawner for thread transfer.
@@ -63,7 +85,14 @@ export class ThreadSpawner {
 
   // hold the worker to prevent GC.
   private worker_background_worker?: Worker;
-  private worker_background_worker_promise?: Promise<void>;
+  private worker_background_worker_promise: Promise<void> = Promise.resolve();
+  private worker_background_ready = false;
+  private worker_background_ready_settled = false;
+  private worker_background_readiness_error?: WorkerDestroyError;
+  private reject_worker_background_worker?: (reason?: unknown) => void;
+  private destroy_promise?: Promise<void>;
+  private coordinator_failure?: WorkerDestroyError;
+  readonly owns_worker_background_worker: boolean;
 
   // https://github.com/rustwasm/wasm-pack/issues/479
 
@@ -96,6 +125,8 @@ export class ThreadSpawner {
     destroy_status?: SharedArrayBuffer,
     animal_id_counter?: SharedArrayBuffer,
   ) {
+    this.owns_worker_background_worker =
+      worker_background_ref_object === undefined;
     this.worker_url = worker_url;
     this.wasi_farm_refs_object = wasi_farm_refs_object;
 
@@ -134,50 +165,126 @@ export class ThreadSpawner {
       this.worker_background_ref_object,
     );
 
-    if (worker_background_ref_object === undefined) {
+    if (this.owns_worker_background_worker) {
       let worker_background_worker_url__: string;
       if (worker_background_worker_url) {
         worker_background_worker_url__ = worker_background_worker_url;
       } else {
         worker_background_worker_url__ = gen_worker_background_worker_url();
       }
-      this.worker_background_worker = new Worker(
-        worker_background_worker_url__,
-        { type: "module" },
-      );
-      if (!worker_background_worker_url) {
-        URL.revokeObjectURL(worker_background_worker_url__);
-      }
-      const { promise, resolve } = Promise.withResolvers<void>();
-      this.worker_background_worker_promise = promise;
-      this.worker_background_worker.onmessage = () => {
-        this.worker_background_worker_promise = undefined;
-        resolve();
+      let workerBackgroundUrlRevoked = false;
+      const revokeWorkerBackgroundUrl = (): void => {
+        if (
+          worker_background_worker_url === undefined &&
+          !workerBackgroundUrlRevoked
+        ) {
+          workerBackgroundUrlRevoked = true;
+          URL.revokeObjectURL(worker_background_worker_url__);
+        }
       };
-      this.worker_background_worker.postMessage({
-        override_object: {
-          sl_object: this.get_object(),
-          thread_spawn_wasm,
-        },
-        worker_background_ref_object: structuredClone(
-          this.worker_background_ref_object,
-        ),
-      });
+      const { promise, resolve, reject } = Promise.withResolvers<void>();
+      this.worker_background_worker_promise = promise;
+      this.reject_worker_background_worker = reject;
+      void promise.catch(() => undefined);
+
+      const failCoordinator = (error: unknown): void => {
+        revokeWorkerBackgroundUrl();
+        const destroyView = new Int32Array(this.destroy_status);
+        const lifecycle = readLifecycle(destroyView);
+        if (
+          lifecycle === WorkerLifecycle.Destroyed ||
+          lifecycle === WorkerLifecycle.Failed ||
+          this.coordinator_failure !== undefined
+        ) {
+          return;
+        }
+        const code = this.worker_background_ready
+          ? WorkerDestroyFailureCode.CoordinatorRuntime
+          : WorkerDestroyFailureCode.CoordinatorBootstrap;
+        const failure = new WorkerDestroyError(code);
+        failure.cause = new Error(coordinatorErrorMessage(error));
+        this.coordinator_failure = failure;
+        if (!this.worker_background_ready_settled) {
+          this.worker_background_ready_settled = true;
+          this.worker_background_readiness_error = failure;
+          reject(failure);
+        }
+        beginDestroy(destroyView);
+        markDestroyFailed(destroyView, code);
+        this.start_destroy_finalization();
+      };
+
+      let coordinator: Worker;
+      try {
+        coordinator = new Worker(worker_background_worker_url__, {
+          type: "module",
+        });
+        this.worker_background_worker = coordinator;
+      } catch (error) {
+        failCoordinator(error);
+        return;
+      }
+
+      coordinator.onmessage = (event) => {
+        revokeWorkerBackgroundUrl();
+        if (
+          readLifecycle(new Int32Array(this.destroy_status)) !==
+          WorkerLifecycle.Running
+        ) {
+          return;
+        }
+        if (!this.worker_background_ready) {
+          if (event.data !== "ready") {
+            failCoordinator(new Error("invalid coordinator ready message"));
+            return;
+          }
+          this.worker_background_ready = true;
+          this.worker_background_ready_settled = true;
+          this.reject_worker_background_worker = undefined;
+          resolve();
+          return;
+        }
+        failCoordinator(new Error("unexpected coordinator message"));
+      };
+      coordinator.onerror = (event) => {
+        event.preventDefault();
+        failCoordinator(event.error ?? new Error(event.message));
+      };
+      coordinator.onmessageerror = () => {
+        failCoordinator(new Error("coordinator message could not be decoded"));
+      };
+      try {
+        const {
+          destroy_status: _destroyStatus,
+          worker_background_ref_object: _workerBackgroundRefObject,
+          ...coordinatorSpawnerObject
+        } = this.get_object();
+        coordinator.postMessage({
+          override_object: {
+            sl_object: coordinatorSpawnerObject,
+            thread_spawn_wasm,
+          },
+          worker_background_ref_object: this.worker_background_ref.get_object(),
+        });
+      } catch (error) {
+        failCoordinator(error);
+      }
+    } else {
+      this.worker_background_ready = true;
+      this.worker_background_ready_settled = true;
     }
   }
 
   // This cannot blocking.
-  async wait_worker_background_worker(): Promise<void> {
-    if (this.worker_background_worker_promise) {
-      await this.worker_background_worker_promise;
-
-      return;
-    }
-    return;
+  wait_worker_background_worker(): Promise<void> {
+    return this.worker_background_worker_promise;
   }
 
   check_worker_background_worker(): void {
-    if (this.worker_background_worker_promise) {
+    if (this.worker_background_readiness_error !== undefined) {
+      throw this.worker_background_readiness_error;
+    }
+    if (!this.worker_background_ready) {
       throw new Error("worker_background_worker is not ready.");
     }
   }
@@ -214,8 +321,12 @@ export class ThreadSpawner {
     return thread_id;
   }
 
-  create_destroyer(): DestroyerHandle {
-    return new DestroyerHandle(this.worker_background_ref, this.destroy_status);
+  create_destroyer(requesterAnimalId?: number): DestroyerHandle {
+    return new DestroyerHandle(
+      this.worker_background_ref,
+      this.destroy_status,
+      requesterAnimalId,
+    );
   }
 
   /// This is atomic
@@ -347,22 +458,56 @@ export class ThreadSpawner {
     return this.worker_background_ref.block_wait_done_or_error();
   }
 
-  /// Destroys the all threads spawned by this Runtime.
-  destroy() {
-    const view = new Int32Array(this.destroy_status);
-    // Acquire lock at idx=0
-    Atomics.store(view, 0, 1);
-    // Set notification flag at idx=1
-    Atomics.store(view, 1, 1);
+  /// Destroys all threads spawned by this Runtime.
+  destroy(requesterAnimalId?: number): void {
+    if (!this.owns_worker_background_worker) {
+      this.create_destroyer(requesterAnimalId).destroy();
+      return;
+    }
 
-    this.worker_background_ref.destroy();
+    const destroyView = new Int32Array(this.destroy_status);
+    if (beginDestroy(destroyView, requesterAnimalId)) {
+      this.worker_background_ref.notify_destroy();
+    }
+    if (!this.worker_background_ready_settled) {
+      const error = new WorkerDestroyError(WorkerDestroyFailureCode.Protocol);
+      this.worker_background_ready_settled = true;
+      this.worker_background_readiness_error = error;
+      this.reject_worker_background_worker?.(error);
+      this.reject_worker_background_worker = undefined;
+    }
+    this.start_destroy_finalization();
+  }
 
-    // Signal completion
-    Atomics.store(view, 0, 0);
-    Atomics.notify(view, 0);
+  async_destroy(requesterAnimalId?: number): Promise<void> {
+    if (!this.owns_worker_background_worker) {
+      return this.create_destroyer(requesterAnimalId).async_destroy();
+    }
+    this.destroy(requesterAnimalId);
+    return this.destroy_promise!;
+  }
 
-    if (this.worker_background_worker) {
-      this.worker_background_worker = undefined;
+  private start_destroy_finalization(): Promise<void> {
+    this.destroy_promise ??= this.finish_destroy();
+    void this.destroy_promise.catch(() => undefined);
+    return this.destroy_promise;
+  }
+
+  private async finish_destroy(): Promise<void> {
+    const coordinator = this.worker_background_worker;
+    try {
+      await waitForDestroyTerminal(new Int32Array(this.destroy_status));
+    } finally {
+      if (
+        coordinator !== undefined &&
+        this.worker_background_worker === coordinator
+      ) {
+        coordinator.onmessage = null;
+        coordinator.onerror = null;
+        coordinator.onmessageerror = null;
+        coordinator.terminate();
+        this.worker_background_worker = undefined;
+      }
     }
   }
 

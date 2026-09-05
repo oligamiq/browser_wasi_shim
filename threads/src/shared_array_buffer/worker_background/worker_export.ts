@@ -21,11 +21,13 @@ export const SIGNATURE_REQUEST_STATUS_LEN = 7;
 export const WorkerBackgroundRefObjectConstructor = (
   destroyStatus: SharedArrayBuffer,
 ): WorkerBackgroundRefObject => {
+  const lock = new SharedArrayBuffer(24);
+  new Int32Array(lock)[1] = 1;
   return {
     allocator: {
       share_arrays_memory: new SharedArrayBuffer(10 * 1024),
     },
-    lock: new SharedArrayBuffer(24),
+    lock,
     signature_input: new SharedArrayBuffer(32),
     destroy_status: destroyStatus,
   };

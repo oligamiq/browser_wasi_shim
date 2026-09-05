@@ -310,7 +310,6 @@ export class WorkerBackgroundRef {
     options?: WorkerOptions,
     post_obj?: unknown,
   ): WorkerRef {
-    console.log("new_worker", url, options, post_obj);
     this.assert_running();
     const request = this.block_allocate_worker_request();
     let urlAllocation: Allocation | undefined;
@@ -524,7 +523,7 @@ export class WorkerBackgroundRef {
 
     const ptr = Atomics.load(notifyView, 1);
     const size = Atomics.load(notifyView, 2);
-    const errorBuffer = this.allocator.get_memory(ptr, size);
+    const errorBuffer = this.allocator.take_memory(ptr, size);
     const errorText = new TextDecoder().decode(errorBuffer);
     const serialized = JSON.parse(errorText) as Serializer.SerializedError;
     throw Serializer.deserialize(serialized);
@@ -534,15 +533,6 @@ export class WorkerBackgroundRef {
     this.block_lock_base_func();
     const view = new Int32Array(this.signature_input);
     Atomics.store(view, 0, 3);
-    this.call_base_func();
-    this.block_wait_base_func();
-    this.release_base_func();
-  }
-
-  destroy(): void {
-    this.block_lock_base_func();
-    const view = new Int32Array(this.signature_input);
-    Atomics.store(view, 0, 5);
     this.call_base_func();
     this.block_wait_base_func();
     this.release_base_func();
