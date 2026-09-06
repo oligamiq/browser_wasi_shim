@@ -585,7 +585,7 @@ export const thread_spawn_on_worker = async (
   ) => Promise<WebAssembly.Instance> = WebAssembly.instantiate.bind(
     WebAssembly,
   ),
-  callback: (wasi: WASIFarmAnimal) => void = () => {},
+  callback: (wasi: WASIFarmAnimal) => void | Promise<void> = () => {},
 ): Promise<WASIFarmAnimal | undefined> => {
   if (msg.this_is_thread_spawn) {
     const {
@@ -621,8 +621,9 @@ export const thread_spawn_on_worker = async (
 
     const { animal_id: animalId } = msg;
 
-    if (msg.this_is_start) {
-      const wasi = new WASIFarmAnimal(
+    let wasi: WASIFarmAnimal;
+    try {
+      wasi = new WASIFarmAnimal(
         sl_object.wasi_farm_refs_object,
         args,
         env,
@@ -635,22 +636,32 @@ export const thread_spawn_on_worker = async (
         thread_spawner,
         animalId,
       );
+      await callback(wasi);
+    } catch (error) {
+      post_worker_error(error, animalId, "animal-construction");
+      return undefined;
+    }
 
-      callback(wasi);
-
-      const inst = await instantiate(thread_spawn_wasm, {
+    let inst: WebAssembly.Instance;
+    try {
+      inst = await instantiate(thread_spawn_wasm, {
         env: {
           ...wasi.get_share_memory(),
         },
         wasi: wasi.wasiThreadImport,
         wasi_snapshot_preview1: wasi.wasiImport,
       });
+    } catch (error) {
+      post_worker_error(error, animalId, "wasm-instantiation");
+      return undefined;
+    }
 
-      globalThis.postMessage({
-        msg: "ready",
-        animal_id: animalId,
-      });
+    globalThis.postMessage({
+      msg: "ready",
+      animal_id: animalId,
+    });
 
+    if (msg.this_is_start) {
       try {
         wasi.start_only(
           inst as unknown as {
@@ -676,35 +687,6 @@ export const thread_spawn_on_worker = async (
     const { worker_id: thread_id, start_arg } = msg;
 
     console.debug(`thread_spawn worker ${thread_id} start`);
-
-    const wasi = new WASIFarmAnimal(
-      sl_object.wasi_farm_refs_object,
-      args,
-      env,
-      {
-        can_thread_spawn: true,
-        thread_spawn_worker_url: sl_object.worker_url,
-        hand_override_fd_map: fd_map,
-      },
-      override_fd_map,
-      thread_spawner,
-      animalId,
-    );
-
-    callback(wasi);
-
-    const inst = await instantiate(thread_spawn_wasm, {
-      env: {
-        ...wasi.get_share_memory(),
-      },
-      wasi: wasi.wasiThreadImport,
-      wasi_snapshot_preview1: wasi.wasiImport,
-    });
-
-    globalThis.postMessage({
-      msg: "ready",
-      animal_id: animalId,
-    });
 
     try {
       wasi.wasi_thread_start(
@@ -738,8 +720,6 @@ function check_error(
   thread_id: number | string,
   animalId: number,
 ): void {
-  let e_alt: Error | undefined;
-
   if (e instanceof WASIProcExit) {
     globalThis.postMessage({
       msg: "exit",
@@ -750,18 +730,29 @@ function check_error(
     return;
   }
 
+  post_worker_error(e, animalId, undefined, thread_id);
+}
+
+function post_worker_error(
+  error: unknown,
+  animalId: number,
+  stage?: "animal-construction" | "wasm-instantiation",
+  threadId: number | string = "startup",
+): void {
+  let cloneableError: unknown = error;
+
   try {
-    structuredClone(e);
-  } catch (error) {
+    structuredClone(error);
+  } catch (cloneError) {
     if (
       (
-        error as {
+        cloneError as {
           name: string;
         }
       ).name === "DataCloneError"
     ) {
-      e_alt = new Error(
-        `An error occurred on the thread ${thread_id}, but it cannot be cloned.
+      const replacement = new Error(
+        `An error occurred on the thread ${threadId}, but it cannot be cloned.
                 Since error propagation does not work properly with this,
                 stopping cannot be performed.
                 Therefore, I will insert this error instead.
@@ -769,17 +760,16 @@ function check_error(
                 after executing with invoke on webworker and reaching an unreachable statement.
                 `,
       );
-      e_alt.name = "EncounteredUncloneableError";
-      e_alt.stack = (e as Error).stack;
+      replacement.name = "EncounteredUncloneableError";
+      replacement.stack = (error as Error).stack;
+      cloneableError = replacement;
     }
-  }
-  if (e_alt === undefined) {
-    e_alt = e as Error;
   }
 
   globalThis.postMessage({
     msg: "error",
     animal_id: animalId,
-    error: e_alt,
+    error: cloneableError,
+    ...(stage === undefined ? {} : { stage }),
   });
 }

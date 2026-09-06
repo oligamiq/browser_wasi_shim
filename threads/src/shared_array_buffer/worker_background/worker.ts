@@ -72,6 +72,7 @@ export class WorkerBackground<T> {
   // @ts-expect-error retained so the coordinator loop remains strongly held.
   private listen_holder: Promise<void>;
   private start_worker?: WorkerRecord;
+  private start_worker_requested = false;
   private animal_workers = new Map<number, WorkerRecord>();
   private pending_animal_workers = new Map<number, WorkerRecord>();
   private worker_animals = new Map<number, number>();
@@ -742,6 +743,21 @@ export class WorkerBackground<T> {
               ? (data as { animal_id?: number; msg?: string })
               : undefined;
           if (
+            message?.msg === "ready" &&
+            Number.isInteger(message.animal_id) &&
+            message.animal_id === record.animal_id &&
+            Atomics.load(
+              new Int32Array(this.destroy_status),
+              DESTROY_REQUESTER_STATUS,
+            ) === RequesterStatus.RequesterDrained
+          ) {
+            return;
+          }
+          if (message?.msg === "ready") {
+            this.mark_inactive_requester_closing(record);
+            return;
+          }
+          if (
             (message?.msg === "error" || message?.msg === "exit") &&
             Number.isInteger(message.animal_id) &&
             message.animal_id === record.animal_id
@@ -766,6 +782,7 @@ export class WorkerBackground<T> {
         code?: number;
         error?: unknown;
         msg?: string;
+        stage?: unknown;
       };
       const isStandardMessage =
         message.msg === "ready" ||
@@ -804,10 +821,15 @@ export class WorkerBackground<T> {
 
       if (message.msg === "error" || message.msg === "exit") {
         if (record.request_view !== undefined) {
-          this.complete_request_failure(
-            record,
-            WorkerRequestFailure.AnimalConstruction,
-          );
+          const failure =
+            message.msg === "error" && message.stage === "animal-construction"
+              ? WorkerRequestFailure.AnimalConstruction
+              : message.msg === "error" &&
+                  message.stage === "wasm-instantiation"
+                ? WorkerRequestFailure.WasmInstantiation
+                : WorkerRequestFailure.Protocol;
+          this.complete_request_failure(record, failure);
+          return;
         }
         this.terminate_registered_workers();
         if (message.msg === "error") {
@@ -873,7 +895,6 @@ export class WorkerBackground<T> {
       );
       return;
     }
-
     let animalId: number;
     try {
       animalId = this.allocate_animal_id();
@@ -951,6 +972,17 @@ export class WorkerBackground<T> {
       );
       return;
     }
+    if (this.start_worker_requested) {
+      completeWorkerRequest(
+        command.requestView,
+        WorkerRequestState.Failed,
+        WorkerRequestFailure.Protocol,
+        0,
+        new Int32Array(this.destroy_status),
+      );
+      return;
+    }
+    this.start_worker_requested = true;
 
     let animalId: number;
     try {
