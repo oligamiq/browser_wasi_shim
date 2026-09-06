@@ -48,23 +48,45 @@ is separate from the agent running the Park listener. The Park agent must remain
 able to process callbacks asynchronously; do not make a blocking Animal call on
 that same agent or on a browser agent where `Atomics.wait` is forbidden.
 
-Call `WASIFarm.destroy()` to synchronously and idempotently destroy the Farm's
-owned Park. It rejects new calls, wakes blocked callers, discards late callback
-results, and makes later `get_ref()` calls fail. It does not destroy Animals or
-terminate external Workers that hold a reference.
-
-The existing Animal destruction methods retain their narrower meanings:
-
-- `animal.destroy()` destroys the Animal and its owned thread resources, but no Park.
-- `animal.destroy_park(n)` destroys only the selected referenced Park.
-- `animal.destroy_park_all()` destroys all Parks referenced by the Animal, but not the Animal.
-- `animal.destroy_with_park()` destroys all referenced Parks and then the Animal.
-
 Forcibly terminating a Worker while it owns a base-call slot cannot run the
 caller's SharedArrayBuffer cleanup. The slot therefore remains occupied until
 the Farm is destroyed. Terminate callers cooperatively when the Farm must remain
 usable; otherwise call `WASIFarm.destroy()` to cancel the remaining slots and
 discard late response payloads.
+
+## Worker runtime destruction
+
+`WASIFarm.destroy()` remains Park-only. It synchronously and idempotently
+destroys the Farm's owned Park, rejects new Park calls, wakes blocked callers,
+discards late callback results, and makes later `get_ref()` calls fail. It does
+not destroy Animals, the worker runtime, or external Workers.
+
+`WASIFarmAnimal.destroy()` and `DestroyerHandle.destroy()` synchronously make
+the shared worker runtime reject new work and initiate runtime-wide teardown.
+Returning means logical teardown has started, not that every Worker has
+physically exited. Neither method destroys a Park.
+
+`WASIFarmAnimal.async_destroy()` and `DestroyerHandle.async_destroy()` observe
+logical teardown completion, including released coordinator state and issued
+termination operations. Browser platforms do not provide a physical thread
+join, so resolution does not guarantee host thread reclamation. When an elected
+managed requester initiates teardown, its Promise resolves after every other
+managed Worker receives termination and its own close is scheduled; code after
+the `await` must not start new runtime work.
+
+A transferred `DestroyerHandleObject` inside a managed worker must be
+reconstructed with `WASIFarmAnimal.init_destroyer()` so the receiving Animal is
+bound as the local requester. `DestroyerHandle.init_self()` creates an unbound
+handle for an external controller.
+
+`WASIFarmAnimal.kill_animal(animal_id)` affects only the published, registered
+Animal with that ID. Unknown, unpublished, completed, or already killed IDs are
+idempotent no-ops and do not change the runtime lifecycle.
+
+The Park-specific methods remain separate: `destroy_park(n)` destroys one
+referenced Park, `destroy_park_all()` destroys all referenced Parks, and
+`destroy_with_park()` destroys the referenced Parks before initiating worker
+runtime teardown.
 
 # Architecture
 

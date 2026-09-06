@@ -394,8 +394,10 @@ export class WASIFarmAnimal {
    *
    * メインスレッド側で destroy_status を持つ DestroyerHandle を生成。
    * Translation: Generate a DestroyerHandle with destroy_status on the main thread side.
-   * ワーカースレッド側は init_self で復元し、destroy() で destroy を通知できる。
-   * Translation: The worker thread side restores it with init_self and can notify destroy with destroy().
+   * A managed worker must reconstruct a transferred object with
+   * WASIFarmAnimal.init_destroyer() so the receiving Animal is bound as the
+   * requester. External controllers use DestroyerHandle.init_self() to create
+   * an unbound handle.
    */
   create_destroyer(): DestroyerHandle {
     if (!this.thread_spawner) {
@@ -404,6 +406,7 @@ export class WASIFarmAnimal {
     return this.thread_spawner.create_destroyer(this.animal_id);
   }
 
+  /** Reconstructs a transferred destroy handle with this Animal's context. */
   init_destroyer(obj: DestroyerHandleObject): DestroyerHandle {
     if (!this.thread_spawner || this.animal_id === undefined) {
       throw new Error("thread spawner is not available");
@@ -413,6 +416,14 @@ export class WASIFarmAnimal {
       : DestroyerHandle.init_self(obj);
   }
 
+  /**
+   * Initiates runtime-wide teardown and observes its logical completion.
+   *
+   * An elected managed requester resolves after all other managed Workers have
+   * received termination and its own close has been scheduled. External and
+   * owner-side callers resolve after coordinator teardown and issued
+   * termination operations; browser platforms do not provide a physical join.
+   */
   async async_destroy(): Promise<void> {
     const spawner = this.thread_spawner;
     try {
@@ -432,10 +443,11 @@ export class WASIFarmAnimal {
   }
 
   /**
-   * Synchronously destroys this Animal and all thread resources it owns.
+   * Synchronously initiates teardown of the entire shared worker runtime.
    *
-   * The method does not destroy any referenced Park. Repeated calls are safe
-   * after the first call has cleared the Animal's owned state.
+   * New runtime work is rejected immediately. The method does not wait for
+   * physical Worker exit or destroy any referenced Park. Repeated calls are
+   * safe after the first call has cleared the Animal's owned state.
    */
   destroy(): void {
     const spawner = this.thread_spawner;
@@ -499,7 +511,7 @@ export class WASIFarmAnimal {
     return this.wasi_farm_refs[idx].call_unknown_fn(unknown);
   }
 
-  /// Kill the Animal with the given ID on another thread
+  /// Kill only the published, registered Animal with the given ID.
   kill_animal(id: number) {
     this.thread_spawner?.kill_animal(id);
   }

@@ -26,6 +26,7 @@ export class DestroyerHandle {
     private readonly requester_animal_id?: number,
   ) {}
 
+  /** Reconstructs an unbound handle for an external controller. */
   static init_self(obj: DestroyerHandleObject): DestroyerHandle {
     return new DestroyerHandle(
       WorkerBackgroundRef.init_self(obj.sender),
@@ -33,6 +34,7 @@ export class DestroyerHandle {
     );
   }
 
+  /** Reconstructs a handle bound to a managed requester's local Animal ID. */
   static init_bound(
     obj: DestroyerHandleObject,
     requesterAnimalId: number,
@@ -51,6 +53,7 @@ export class DestroyerHandle {
     };
   }
 
+  /** Synchronously rejects new work and initiates runtime-wide teardown. */
   destroy(): void {
     const view = new Int32Array(this.destroy_status);
     if (beginDestroy(view, this.requester_animal_id)) {
@@ -61,6 +64,13 @@ export class DestroyerHandle {
     }
   }
 
+  /**
+   * Observes logical teardown and issued termination operations.
+   *
+   * An elected managed requester resolves after every other managed Worker has
+   * received termination and its own close has been scheduled. Browser hosts
+   * do not provide a physical thread join.
+   */
   async async_destroy(): Promise<void> {
     const view = new Int32Array(this.destroy_status);
     const won = beginDestroy(view, this.requester_animal_id);

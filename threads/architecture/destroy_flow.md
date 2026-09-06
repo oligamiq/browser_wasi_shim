@@ -1,3 +1,9 @@
+> [!WARNING]
+> The worker teardown portions of this document are superseded by
+> `docs/superpowers/specs/2026-09-04-worker-destroy-lifecycle-design.md`.
+> Park and BaseCall behavior remains governed by
+> `architecture/base_call_multiplexing_design.md`.
+
 # destroy() のスレッドごとのフローと設計方針
 
 ## 背景と課題の整理

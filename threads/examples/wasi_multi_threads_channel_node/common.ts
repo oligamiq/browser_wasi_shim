@@ -24,6 +24,9 @@ const set_fake_worker = () => {
     throw new Error("not main thread");
   }
 
+  (globalThis as typeof globalThis & { close: () => void }).close = () => {
+    process.exit(0);
+  };
   globalThis.postMessage = (msg: any) => {
     parentPort.postMessage({
       data: msg,
