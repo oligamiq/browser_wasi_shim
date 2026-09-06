@@ -24,18 +24,35 @@ const OBSERVABLE_WORKER_URL = new URL(
   "./test_workers/observable_animal_worker.ts",
   import.meta.url,
 ).href;
-const CONTROL_WORKER_URL = new URL(
-  "./test_workers/broadcast_control_worker.ts",
+const SPAWN_WORKER_URL = new URL(
+  "./test_workers/managed_spawn_worker.ts",
   import.meta.url,
 ).href;
+
+const STDIO_FD_MAP: [number, number][] = [
+  [0, 0],
+  [1, 0],
+  [2, 0],
+];
+const REQUESTER_RESOLVED = 1;
+const REQUESTER_RELEASED = 2;
 
 type Observation = {
   animal_id?: number;
   lifecycle?: number;
   requester_status?: number;
   seq?: number;
+  token?: string;
   type?: string;
 };
+
+function createFarm(): WASIFarm {
+  return new WASIFarm(
+    new OpenFile(new File([])),
+    new OpenFile(new File([])),
+    new OpenFile(new File([])),
+  );
+}
 
 function createSpawner(
   workerUrl: string,
@@ -91,35 +108,67 @@ async function cleanupSpawner(spawner: ThreadSpawner): Promise<void> {
   );
 }
 
+async function spawnManagedAnimal(
+  worker: Worker,
+  spawner: ThreadSpawner,
+  args: string[],
+  label: string,
+): Promise<void> {
+  const requestId = crypto.randomUUID();
+  await withTimeout(
+    new Promise<void>((resolve, reject) => {
+      worker.onmessage = (
+        event: MessageEvent<{
+          error?: string;
+          request_id?: string;
+          type?: string;
+        }>,
+      ) => {
+        if (event.data.request_id !== requestId) return;
+        worker.onmessage = null;
+        worker.onerror = null;
+        if (event.data.type === "spawned") resolve();
+        else reject(new Error(event.data.error ?? "managed spawn failed"));
+      };
+      worker.onerror = (event) =>
+        reject(event.error ?? new Error(event.message));
+      worker.postMessage({
+        args,
+        fd_map: STDIO_FD_MAP,
+        request_id: requestId,
+        spawner: spawner.get_object(),
+      });
+    }),
+    label,
+  );
+}
+
 function observeChannel(channel: BroadcastChannel): {
-  controlHeartbeats: () => number;
   events: Observation[];
-  heartbeatCount: (animalId: number) => number;
-  readyIds: Set<number>;
+  heartbeatCount: (token: string) => number;
+  readyId: (token: string) => number | undefined;
 } {
   const events: Observation[] = [];
-  const heartbeats = new Map<number, number>();
-  const readyIds = new Set<number>();
-  let controlHeartbeats = 0;
+  const heartbeats = new Map<string, number>();
+  const readyIds = new Map<string, number>();
   channel.onmessage = (event: MessageEvent<Observation>) => {
     const message = event.data;
     events.push(message);
-    if (message.type === "ready" && message.animal_id !== undefined) {
-      readyIds.add(message.animal_id);
+    if (
+      message.type === "managed-ready" &&
+      message.animal_id !== undefined &&
+      message.token !== undefined
+    ) {
+      readyIds.set(message.token, message.animal_id);
     }
-    if (message.type === "heartbeat" && message.animal_id !== undefined) {
-      heartbeats.set(
-        message.animal_id,
-        (heartbeats.get(message.animal_id) ?? 0) + 1,
-      );
+    if (message.type === "heartbeat" && message.token !== undefined) {
+      heartbeats.set(message.token, (heartbeats.get(message.token) ?? 0) + 1);
     }
-    if (message.type === "control-heartbeat") controlHeartbeats += 1;
   };
   return {
-    controlHeartbeats: () => controlHeartbeats,
     events,
-    heartbeatCount: (animalId) => heartbeats.get(animalId) ?? 0,
-    readyIds,
+    heartbeatCount: (token) => heartbeats.get(token) ?? 0,
+    readyId: (token) => readyIds.get(token),
   };
 }
 
@@ -128,12 +177,11 @@ describe("real managed Animal lifecycle races", () => {
     const channelName = `managed-requester-${crypto.randomUUID()}`;
     const channel = new BroadcastChannel(channelName);
     const observations = observeChannel(channel);
-    const farm = new WASIFarm(
-      new OpenFile(new File([])),
-      new OpenFile(new File([])),
-      new OpenFile(new File([])),
-    );
+    const farm = createFarm();
     const spawner = createSpawner(REQUESTER_WORKER_URL, [farm.get_ref()]);
+    const requesterGate = new Int32Array(
+      spawner.get_object().animal_id_counter,
+    );
     try {
       await withTimeout(
         spawner.wait_worker_background_worker(),
@@ -148,11 +196,7 @@ describe("real managed Animal lifecycle races", () => {
         {
           args: [channelName],
           env: [],
-          fd_map: [
-            [0, 0],
-            [1, 0],
-            [2, 0],
-          ],
+          fd_map: STDIO_FD_MAP,
           this_is_start: true,
           this_is_thread_spawn: true,
         },
@@ -165,25 +209,31 @@ describe("real managed Animal lifecycle races", () => {
       channel.postMessage({ type: "begin-destroy" });
 
       await waitFor(
-        () => observations.events.some((event) => event.type === "resolved"),
-        "managed requester resolution",
+        () => Atomics.load(requesterGate, 0) === REQUESTER_RESOLVED,
+        "managed requester async resolution",
       );
-      const resolved = observations.events.find(
-        (event) => event.type === "resolved",
-      );
-      assert.strictEqual(
-        resolved?.requester_status,
-        RequesterStatus.RequesterDrained,
-      );
-      assert.strictEqual(resolved?.lifecycle, WorkerLifecycle.Destroying);
-      await withTimeout(spawner.async_destroy(), "managed requester terminal");
       const destroyView = new Int32Array(spawner.get_object().destroy_status);
       assert.strictEqual(
         Atomics.load(destroyView, DESTROY_REQUESTER_STATUS),
-        RequesterStatus.Closing,
+        RequesterStatus.RequesterDrained,
       );
+      assert.strictEqual(
+        readLifecycle(destroyView),
+        WorkerLifecycle.Destroying,
+      );
+      Atomics.store(requesterGate, 0, REQUESTER_RELEASED);
+      Atomics.notify(requesterGate, 0);
+      await waitFor(
+        () =>
+          Atomics.load(destroyView, DESTROY_REQUESTER_STATUS) ===
+          RequesterStatus.Closing,
+        "scheduled requester Closing",
+      );
+      await withTimeout(spawner.async_destroy(), "managed requester terminal");
       assert.strictEqual(readLifecycle(destroyView), WorkerLifecycle.Destroyed);
     } finally {
+      Atomics.store(requesterGate, 0, REQUESTER_RELEASED);
+      Atomics.notify(requesterGate, 0);
       channel.close();
       await cleanupSpawner(spawner);
       farm.destroy();
@@ -194,55 +244,74 @@ describe("real managed Animal lifecycle races", () => {
     const channelName = `selective-kill-${crypto.randomUUID()}`;
     const channel = new BroadcastChannel(channelName);
     const observations = observeChannel(channel);
-    const spawner = createSpawner(OBSERVABLE_WORKER_URL);
+    const farm = createFarm();
+    const spawner = createSpawner(OBSERVABLE_WORKER_URL, [farm.get_ref()]);
+    const spawnWorker = new Worker(SPAWN_WORKER_URL, { type: "module" });
+    const firstToken = "first";
+    const secondToken = "second";
     try {
       await withTimeout(
         spawner.wait_worker_background_worker(),
         "kill coordinator readiness",
       );
-      spawner.thread_spawn(0, [channelName], [], []);
-      spawner.thread_spawn(0, [channelName], [], []);
+      await spawnManagedAnimal(
+        spawnWorker,
+        spawner,
+        [channelName, firstToken],
+        "first managed spawn",
+      );
+      await spawnManagedAnimal(
+        spawnWorker,
+        spawner,
+        [channelName, secondToken],
+        "second managed spawn",
+      );
       await waitFor(
         () =>
-          observations.readyIds.size === 2 &&
-          [...observations.readyIds].every(
-            (animalId) => observations.heartbeatCount(animalId) >= 2,
-          ),
+          observations.readyId(firstToken) !== undefined &&
+          observations.readyId(secondToken) !== undefined &&
+          observations.heartbeatCount(firstToken) >= 2 &&
+          observations.heartbeatCount(secondToken) >= 2,
         "two live Animal heartbeats",
       );
-      const [firstId, secondId] = [...observations.readyIds];
+      const firstId = observations.readyId(firstToken);
+      const secondId = observations.readyId(secondToken);
+      assert.ok(firstId !== undefined);
+      assert.ok(secondId !== undefined);
       assert.notStrictEqual(firstId, secondId);
 
       spawner.kill_animal(firstId);
-      const secondFlushTarget = observations.heartbeatCount(secondId) + 2;
+      const secondFlushTarget = observations.heartbeatCount(secondToken) + 2;
       await waitFor(
-        () => observations.heartbeatCount(secondId) >= secondFlushTarget,
+        () => observations.heartbeatCount(secondToken) >= secondFlushTarget,
         "survivor heartbeat flush",
       );
-      const stoppedFirstCount = observations.heartbeatCount(firstId);
-      const secondProofTarget = observations.heartbeatCount(secondId) + 3;
+      const stoppedFirstCount = observations.heartbeatCount(firstToken);
+      const secondProofTarget = observations.heartbeatCount(secondToken) + 3;
       await waitFor(
-        () => observations.heartbeatCount(secondId) >= secondProofTarget,
+        () => observations.heartbeatCount(secondToken) >= secondProofTarget,
         "survivor after first kill",
       );
       assert.strictEqual(
-        observations.heartbeatCount(firstId),
+        observations.heartbeatCount(firstToken),
         stoppedFirstCount,
       );
 
       spawner.kill_animal(firstId);
-      const repeatedProofTarget = observations.heartbeatCount(secondId) + 3;
+      const repeatedProofTarget = observations.heartbeatCount(secondToken) + 3;
       await waitFor(
-        () => observations.heartbeatCount(secondId) >= repeatedProofTarget,
+        () => observations.heartbeatCount(secondToken) >= repeatedProofTarget,
         "survivor after repeated kill",
       );
       assert.strictEqual(
-        observations.heartbeatCount(firstId),
+        observations.heartbeatCount(firstToken),
         stoppedFirstCount,
       );
     } finally {
+      spawnWorker.terminate();
       channel.close();
       await cleanupSpawner(spawner);
+      farm.destroy();
     }
   });
 
@@ -251,25 +320,37 @@ describe("real managed Animal lifecycle races", () => {
       const channelName = `${outcome}-sender-${crypto.randomUUID()}`;
       const channel = new BroadcastChannel(channelName);
       const observations = observeChannel(channel);
-      const control = new Worker(CONTROL_WORKER_URL, { type: "module" });
-      const spawner = createSpawner(OBSERVABLE_WORKER_URL);
+      const farm = createFarm();
+      const spawner = createSpawner(OBSERVABLE_WORKER_URL, [farm.get_ref()]);
+      const spawnWorker = new Worker(SPAWN_WORKER_URL, { type: "module" });
+      const senderToken = `${outcome}-sender`;
+      const replacementToken = `${outcome}-replacement`;
       try {
-        control.postMessage({ channel: channelName });
         await withTimeout(
           spawner.wait_worker_background_worker(),
           `${outcome} coordinator readiness`,
         );
-        spawner.thread_spawn(0, [channelName], [], []);
+        await spawnManagedAnimal(
+          spawnWorker,
+          spawner,
+          [channelName, senderToken],
+          `${outcome} managed sender spawn`,
+        );
         await waitFor(
           () =>
-            observations.readyIds.size === 1 &&
-            observations.controlHeartbeats() >= 2 &&
-            observations.heartbeatCount([...observations.readyIds][0]) >= 2,
+            observations.readyId(senderToken) !== undefined &&
+            observations.heartbeatCount(senderToken) >= 2,
           `${outcome} sender activity`,
         );
-        const animalId = [...observations.readyIds][0];
+        const animalId = observations.readyId(senderToken);
+        assert.ok(animalId !== undefined);
         const runtimeResult = spawner.async_wait_done_or_error();
-        channel.postMessage({ animal_id: animalId, outcome, type: "trigger" });
+        channel.postMessage({
+          animal_id: animalId,
+          outcome,
+          token: senderToken,
+          type: "trigger",
+        });
         if (outcome === "error") {
           await assert.rejects(
             withTimeout(runtimeResult, "real error runtime result"),
@@ -282,22 +363,37 @@ describe("real managed Animal lifecycle races", () => {
           );
         }
 
-        const controlFlushTarget = observations.controlHeartbeats() + 2;
-        await waitFor(
-          () => observations.controlHeartbeats() >= controlFlushTarget,
-          `${outcome} control flush`,
+        await spawnManagedAnimal(
+          spawnWorker,
+          spawner,
+          [channelName, replacementToken],
+          `${outcome} managed replacement spawn`,
         );
-        const stoppedCount = observations.heartbeatCount(animalId);
-        const controlProofTarget = observations.controlHeartbeats() + 3;
         await waitFor(
-          () => observations.controlHeartbeats() >= controlProofTarget,
+          () =>
+            observations.readyId(replacementToken) !== undefined &&
+            observations.heartbeatCount(replacementToken) >= 2,
+          `${outcome} replacement activity`,
+        );
+        assert.strictEqual(observations.readyId(replacementToken), animalId);
+        const stoppedCount = observations.heartbeatCount(senderToken);
+        const replacementProofTarget =
+          observations.heartbeatCount(replacementToken) + 3;
+        await waitFor(
+          () =>
+            observations.heartbeatCount(replacementToken) >=
+            replacementProofTarget,
           `${outcome} sender stop proof`,
         );
-        assert.strictEqual(observations.heartbeatCount(animalId), stoppedCount);
+        assert.strictEqual(
+          observations.heartbeatCount(senderToken),
+          stoppedCount,
+        );
       } finally {
-        control.terminate();
+        spawnWorker.terminate();
         channel.close();
         await cleanupSpawner(spawner);
+        farm.destroy();
       }
     });
   }
