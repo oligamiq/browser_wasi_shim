@@ -27,6 +27,44 @@ export enum WorkerCommandState {
   Claimed = 3,
 }
 
+// Reservation prevents new callers from starving a pending termination batch.
+export enum WorkerTerminationGate {
+  Free = 0,
+  Caller = 1,
+  Reserved = 2,
+  CallerReserved = 3,
+  Coordinator = 4,
+}
+
+export function reserveWorkerTermination(view: Int32Array): void {
+  for (;;) {
+    const state = Atomics.load(view, WORKER_COMMAND_MUTEX);
+    if (
+      state !== WorkerTerminationGate.Free &&
+      state !== WorkerTerminationGate.Caller
+    )
+      return;
+    const reserved =
+      state === WorkerTerminationGate.Free
+        ? WorkerTerminationGate.Reserved
+        : WorkerTerminationGate.CallerReserved;
+    if (
+      Atomics.compareExchange(view, WORKER_COMMAND_MUTEX, state, reserved) ===
+      state
+    ) {
+      wakeWorkerCommandActivity(view);
+      Atomics.notify(view, WORKER_COMMAND_MUTEX);
+      return;
+    }
+  }
+}
+
+export function releaseWorkerTermination(view: Int32Array): void {
+  Atomics.store(view, WORKER_COMMAND_MUTEX, WorkerTerminationGate.Free);
+  wakeWorkerCommandActivity(view);
+  Atomics.notify(view, WORKER_COMMAND_MUTEX);
+}
+
 export function wakeWorkerCommandActivity(view: Int32Array): void {
   Atomics.add(view, WORKER_COMMAND_ACTIVITY_EPOCH, 1);
   Atomics.notify(view, WORKER_COMMAND_ACTIVITY_EPOCH);

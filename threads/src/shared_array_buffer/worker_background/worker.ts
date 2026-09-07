@@ -41,6 +41,9 @@ import {
   WORKER_RUNTIME_COMPLETION_OFFSET_BYTES,
   WORKER_RUNTIME_COMPLETION_WORDS,
   WorkerCommandState,
+  WorkerTerminationGate,
+  reserveWorkerTermination,
+  releaseWorkerTermination,
 } from "./worker_export.js";
 import type { WorkerBackgroundRefObject } from "./worker_export.js";
 
@@ -79,6 +82,8 @@ export class WorkerBackground<T> {
   private next_animal_id = 0;
   private free_animal_ids: number[] = [];
   private terminated_records = new WeakSet<WorkerRecord>();
+  private pending_retirements = new Set<WorkerRecord>();
+  private stopping_workers = false;
   private teardown_promise?: Promise<void>;
   private teardown_failure?: WorkerDestroyFailureCode;
   private teardown_requester?: WorkerRecord;
@@ -166,7 +171,21 @@ export class WorkerBackground<T> {
     worker.terminate();
   }
 
-  private retire_record(record: WorkerRecord, terminate = true): boolean {
+  private retire_record(record: WorkerRecord): void {
+    if (this.terminated_records.has(record)) return;
+    this.pending_retirements.add(record);
+    reserveWorkerTermination(new Int32Array(this.lock));
+  }
+
+  private drain_retirements(): void {
+    for (const record of this.pending_retirements) {
+      this.retire_record_inner(record);
+    }
+    this.pending_retirements.clear();
+    this.stopping_workers = false;
+  }
+
+  private retire_record_inner(record: WorkerRecord, terminate = true): boolean {
     if (record.retired) return false;
     record.retired = true;
     let ownsIdentity = false;
@@ -206,6 +225,7 @@ export class WorkerBackground<T> {
   private is_active_record(record: WorkerRecord): boolean {
     return (
       !record.retired &&
+      !this.pending_retirements.has(record) &&
       (record.worker_id === 0
         ? this.start_worker === record
         : this.workers[record.worker_id] === record)
@@ -227,6 +247,7 @@ export class WorkerBackground<T> {
   }
 
   private terminate_registered_workers(): void {
+    this.stopping_workers = true;
     const records = new Set<WorkerRecord>();
     for (const record of this.workers) {
       if (record !== undefined) records.add(record);
@@ -251,11 +272,7 @@ export class WorkerBackground<T> {
       }
       this.retire_record(record);
     }
-    this.workers = [undefined];
-    this.start_worker = undefined;
-    this.animal_workers.clear();
-    this.pending_animal_workers.clear();
-    this.worker_animals.clear();
+    reserveWorkerTermination(new Int32Array(this.lock));
   }
 
   private cancel_runtime(): void {
@@ -265,7 +282,11 @@ export class WorkerBackground<T> {
       WORKER_RUNTIME_COMPLETION_WORDS,
     );
     if (claimRuntimeCompletion(completionView)) {
-      finishRuntimeCompletion(completionView, RuntimeCompletion.Cancelled);
+      finishRuntimeCompletion(
+        completionView,
+        RuntimeCompletion.Cancelled,
+        new Int32Array(this.destroy_status),
+      );
     }
   }
 
@@ -283,7 +304,6 @@ export class WorkerBackground<T> {
     this.teardown_failure ??= code;
     beginDestroy(new Int32Array(this.destroy_status));
     wakeWorkerCommandActivity(new Int32Array(this.lock));
-    void this.teardown();
   }
 
   private record_teardown_error(error: unknown): void {
@@ -315,6 +335,7 @@ export class WorkerBackground<T> {
   }
 
   private async teardown_inner(): Promise<void> {
+    const lockView = new Int32Array(this.lock);
     const destroyView = new Int32Array(this.destroy_status);
     const requesterId = readRequesterAnimalId(destroyView);
     const requester =
@@ -323,6 +344,7 @@ export class WorkerBackground<T> {
         : (this.animal_workers.get(requesterId) ??
           this.pending_animal_workers.get(requesterId));
     const records = new Set<WorkerRecord>();
+    for (const record of this.pending_retirements) records.add(record);
     for (const record of this.workers) {
       if (record !== undefined) records.add(record);
     }
@@ -350,7 +372,7 @@ export class WorkerBackground<T> {
         }
       }
       try {
-        this.retire_record(record, record !== requester);
+        this.retire_record_inner(record, record !== requester);
       } catch (error) {
         this.record_teardown_error(error);
       }
@@ -360,12 +382,16 @@ export class WorkerBackground<T> {
     this.animal_workers.clear();
     this.pending_animal_workers.clear();
     this.worker_animals.clear();
+    this.pending_retirements.clear();
 
     try {
       this.cancel_runtime();
     } catch (error) {
       this.record_teardown_error(error);
     }
+
+    // The requester must be able to finish short updates before Closing.
+    releaseWorkerTermination(lockView);
 
     if (requester !== undefined) {
       Atomics.store(
@@ -379,10 +405,19 @@ export class WorkerBackground<T> {
       } catch (error) {
         this.record_teardown_error(error);
       }
+      while (await this.claim_command(lockView, true)) {
+        try {
+          this.cancel_claimed_command(new Int32Array(this.signature_input));
+        } finally {
+          this.acknowledge_command(lockView);
+        }
+      }
       try {
         this.terminate_worker(requester);
       } catch (error) {
         this.record_teardown_error(error);
+      } finally {
+        releaseWorkerTermination(lockView);
       }
     }
     this.teardown_requester = undefined;
@@ -417,7 +452,9 @@ export class WorkerBackground<T> {
     }
     const requestView = record.request_view;
     const destroyView = new Int32Array(this.destroy_status);
-    const running = readLifecycle(destroyView) === WorkerLifecycle.Running;
+    const running =
+      readLifecycle(destroyView) === WorkerLifecycle.Running &&
+      !this.stopping_workers;
     const validId = Number.isInteger(animalId) && animalId === record.animal_id;
     const pending =
       requestView !== undefined &&
@@ -497,7 +534,11 @@ export class WorkerBackground<T> {
     );
     if (!claimRuntimeCompletion(completionView)) return;
     Atomics.store(completionView, 1, code);
-    finishRuntimeCompletion(completionView, RuntimeCompletion.Exit);
+    finishRuntimeCompletion(
+      completionView,
+      RuntimeCompletion.Exit,
+      new Int32Array(this.destroy_status),
+    );
   }
 
   private publish_runtime_done(): void {
@@ -507,10 +548,14 @@ export class WorkerBackground<T> {
       WORKER_RUNTIME_COMPLETION_WORDS,
     );
     if (!claimRuntimeCompletion(completionView)) return;
-    finishRuntimeCompletion(completionView, RuntimeCompletion.Done);
+    finishRuntimeCompletion(
+      completionView,
+      RuntimeCompletion.Done,
+      new Int32Array(this.destroy_status),
+    );
   }
 
-  private async publish_runtime_error(value: unknown): Promise<void> {
+  private publish_runtime_error(value: unknown): void {
     const completionView = new Int32Array(
       this.lock,
       WORKER_RUNTIME_COMPLETION_OFFSET_BYTES,
@@ -519,23 +564,38 @@ export class WorkerBackground<T> {
     let allocation: [number, number] | undefined;
     try {
       const serialized = Serializer.serialize(asError(value));
-      allocation = await this.allocator.async_write(
-        new TextEncoder().encode(JSON.stringify(serialized)),
-        new SharedArrayBuffer(8),
-        0,
-      );
+      const data = new TextEncoder().encode(JSON.stringify(serialized));
+      const allocatorView = new Int32Array(this.allocator.share_arrays_memory);
+      // A terminated worker may own this mutex. Never wait for its release.
+      if (Atomics.compareExchange(allocatorView, 0, 0, 1) !== 0) {
+        throw new Error("runtime error allocator is busy");
+      }
+      try {
+        allocation = this.allocator.write_inner(
+          data,
+          new SharedArrayBuffer(8),
+          0,
+        );
+      } finally {
+        Atomics.store(allocatorView, 0, 0);
+        Atomics.notify(allocatorView, 0, 1);
+      }
       if (!claimRuntimeCompletion(completionView)) {
         this.allocator.free(allocation[0], allocation[1]);
         return;
       }
       Atomics.store(completionView, 1, allocation[0]);
       Atomics.store(completionView, 2, allocation[1]);
-      finishRuntimeCompletion(completionView, RuntimeCompletion.Error);
+      finishRuntimeCompletion(
+        completionView,
+        RuntimeCompletion.Error,
+        new Int32Array(this.destroy_status),
+      );
     } catch (error) {
       if (allocation !== undefined) {
         this.allocator.free(allocation[0], allocation[1]);
       }
-      console.error(error);
+      this.fail_runtime(error);
     }
   }
 
@@ -671,13 +731,35 @@ export class WorkerBackground<T> {
     Atomics.notify(lockView, WORKER_COMMAND_ACK, 1);
   }
 
-  private async claim_command(lockView: Int32Array): Promise<boolean> {
+  private async claim_command(
+    lockView: Int32Array,
+    terminating = false,
+  ): Promise<boolean> {
     for (;;) {
+      if (
+        terminating ||
+        this.pending_retirements.size > 0 ||
+        this.stopping_workers
+      )
+        reserveWorkerTermination(lockView);
       const epoch = Atomics.load(lockView, WORKER_COMMAND_ACTIVITY_EPOCH);
       const state = Atomics.load(lockView, WORKER_COMMAND_PHASE);
       const mutex = Atomics.load(lockView, WORKER_COMMAND_MUTEX);
-      if (state === WorkerCommandState.Idle && mutex === 0) {
-        return false;
+      if (state === WorkerCommandState.Idle) {
+        if (mutex === WorkerTerminationGate.Coordinator) return false;
+        if (
+          mutex === WorkerTerminationGate.Reserved &&
+          Atomics.compareExchange(
+            lockView,
+            WORKER_COMMAND_MUTEX,
+            WorkerTerminationGate.Reserved,
+            WorkerTerminationGate.Coordinator,
+          ) === WorkerTerminationGate.Reserved
+        ) {
+          wakeWorkerCommandActivity(lockView);
+          return false;
+        }
+        if (mutex === WorkerTerminationGate.Free && !terminating) return false;
       }
       if (state === WorkerCommandState.Published) {
         if (
@@ -721,7 +803,7 @@ export class WorkerBackground<T> {
     lockView: Int32Array,
     signatureView: Int32Array,
   ): Promise<void> {
-    if (await this.claim_command(lockView)) {
+    while (await this.claim_command(lockView, true)) {
       try {
         this.cancel_claimed_command(signatureView);
       } finally {
@@ -766,7 +848,7 @@ export class WorkerBackground<T> {
           }
           return;
         }
-        this.terminate_worker(record);
+        this.retire_record(record);
         return;
       }
       if (data === null || typeof data !== "object") {
@@ -833,7 +915,7 @@ export class WorkerBackground<T> {
         }
         this.terminate_registered_workers();
         if (message.msg === "error") {
-          void this.publish_runtime_error(
+          this.publish_runtime_error(
             message.error ?? new Error("worker error"),
           );
         } else {
@@ -849,12 +931,13 @@ export class WorkerBackground<T> {
     };
 
     worker.onerror = (event) => {
+      // Retiring workers remain alive until the termination gate is acquired.
+      event.preventDefault();
       if (!this.is_active_record(record)) {
         if (this.mark_inactive_requester_closing(record)) return;
-        this.terminate_worker(record);
+        this.retire_record(record);
         return;
       }
-      event.preventDefault();
       if (record.request_view !== undefined) {
         this.complete_request_failure(record, WorkerRequestFailure.ScriptLoad);
       }
@@ -863,7 +946,7 @@ export class WorkerBackground<T> {
     worker.onmessageerror = () => {
       if (!this.is_active_record(record)) {
         if (this.mark_inactive_requester_closing(record)) return;
-        this.terminate_worker(record);
+        this.retire_record(record);
         return;
       }
       if (record.request_view !== undefined) {
@@ -883,8 +966,9 @@ export class WorkerBackground<T> {
     }
 
     if (
+      this.stopping_workers ||
       readLifecycle(new Int32Array(this.destroy_status)) !==
-      WorkerLifecycle.Running
+        WorkerLifecycle.Running
     ) {
       completeWorkerRequest(
         command.requestView,
@@ -960,8 +1044,9 @@ export class WorkerBackground<T> {
       return;
     }
     if (
+      this.stopping_workers ||
       readLifecycle(new Int32Array(this.destroy_status)) !==
-      WorkerLifecycle.Running
+        WorkerLifecycle.Running
     ) {
       completeWorkerRequest(
         command.requestView,
@@ -1048,6 +1133,7 @@ export class WorkerBackground<T> {
     }
     const record = this.animal_workers.get(animalId);
     if (record === undefined) return;
+    if (record === this.start_worker) this.cancel_runtime();
     this.retire_record(record);
   }
 
@@ -1085,6 +1171,20 @@ export class WorkerBackground<T> {
         return;
       }
 
+      if (
+        Atomics.load(lockView, WORKER_COMMAND_MUTEX) ===
+        WorkerTerminationGate.Coordinator
+      ) {
+        try {
+          this.drain_retirements();
+        } catch (error) {
+          this.fail_runtime(error);
+        } finally {
+          releaseWorkerTermination(lockView);
+        }
+        continue;
+      }
+
       const phase = Atomics.load(lockView, WORKER_COMMAND_PHASE);
       const mutex = Atomics.load(lockView, WORKER_COMMAND_MUTEX);
       if (phase === WorkerCommandState.Idle && mutex === 0) {
@@ -1114,8 +1214,7 @@ export class WorkerBackground<T> {
         } finally {
           this.acknowledge_command(lockView);
         }
-        await this.teardown();
-        return;
+        continue;
       }
 
       try {

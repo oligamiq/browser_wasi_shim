@@ -220,7 +220,11 @@ describe("worker operation requests", () => {
       RuntimeCompletion.Completing,
     );
     Atomics.store(completion, 1, 27);
-    finishRuntimeCompletion(completion, RuntimeCompletion.Exit);
+    finishRuntimeCompletion(
+      completion,
+      RuntimeCompletion.Exit,
+      new Int32Array(createDestroyStatus()),
+    );
 
     assert.deepStrictEqual(Array.from(completion), [
       RuntimeCompletion.Exit,

@@ -139,8 +139,12 @@ export function claimRuntimeCompletion(view: Int32Array): boolean {
   );
 }
 
-export function cancelRuntimeCompletion(view: Int32Array): boolean {
+export function cancelRuntimeCompletion(
+  view: Int32Array,
+  destroyView: Int32Array,
+): boolean {
   validateSharedView(view, WORKER_REQUEST_BYTES, "runtime completion view");
+  validateSharedView(destroyView, DESTROY_STATUS_BYTES, "destroy status view");
   if (
     Atomics.compareExchange(
       view,
@@ -152,6 +156,7 @@ export function cancelRuntimeCompletion(view: Int32Array): boolean {
     return false;
   }
   Atomics.notify(view, RUNTIME_COMPLETION_STATE);
+  wakeDestroyWaiters(destroyView);
   return true;
 }
 
@@ -162,8 +167,10 @@ export function finishRuntimeCompletion(
     | RuntimeCompletion.Exit
     | RuntimeCompletion.Done
     | RuntimeCompletion.Cancelled,
+  destroyView: Int32Array,
 ): void {
   validateSharedView(view, WORKER_REQUEST_BYTES, "runtime completion view");
+  validateSharedView(destroyView, DESTROY_STATUS_BYTES, "destroy status view");
   if (
     state !== RuntimeCompletion.Error &&
     state !== RuntimeCompletion.Exit &&
@@ -183,6 +190,7 @@ export function finishRuntimeCompletion(
     throw new Error("runtime completion was not claimed");
   }
   Atomics.notify(view, RUNTIME_COMPLETION_STATE);
+  wakeDestroyWaiters(destroyView);
 }
 
 export function completeWorkerRequest(

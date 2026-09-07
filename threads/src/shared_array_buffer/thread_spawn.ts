@@ -27,6 +27,7 @@ import { WorkerBackgroundRefObjectConstructor } from "./worker_background/worker
 import {
   beginDestroy,
   createDestroyStatus,
+  DESTROY_WAKE_EPOCH,
   markDestroyFailed,
   readLifecycle,
   waitForDestroyTerminal,
@@ -283,6 +284,9 @@ export class ThreadSpawner {
       } catch (error) {
         failCoordinator(error);
       }
+      void this.observe_destroy()
+        .finally(revokeWorkerBackgroundUrl)
+        .catch((error) => console.error(error));
     } else {
       this.worker_background_ready = true;
       this.worker_background_ready_settled = true;
@@ -460,7 +464,10 @@ export class ThreadSpawner {
   }
 
   done_notify(code: number): void {
-    this.worker_background_ref.done_notify(code);
+    this.worker_background_ref.done_notify(
+      code,
+      this.owns_worker_background_worker,
+    );
   }
 
   async async_wait_done_or_error(): Promise<number> {
@@ -515,6 +522,21 @@ export class ThreadSpawner {
     this.destroy_promise ??= this.finish_destroy();
     void this.destroy_promise.catch(() => undefined);
     return this.destroy_promise;
+  }
+
+  private async observe_destroy(): Promise<void> {
+    const view = new Int32Array(this.destroy_status);
+    for (;;) {
+      const epoch = Atomics.load(view, DESTROY_WAKE_EPOCH);
+      if (readLifecycle(view) !== WorkerLifecycle.Running) {
+        this.destroy();
+        // Bootstrap may still be fetching the generated worker URL.
+        await this.start_destroy_finalization().catch(() => undefined);
+        return;
+      }
+      const { value } = Atomics.waitAsync(view, DESTROY_WAKE_EPOCH, epoch);
+      if (value instanceof Promise) await value;
+    }
   }
 
   private async finish_destroy(): Promise<void> {

@@ -45,6 +45,7 @@ export class WASIFarmAnimal {
   private can_thread_spawn?: boolean;
 
   private thread_spawner?: ThreadSpawner;
+  private destroy_promise?: Promise<void>;
 
   async wait_worker_background_worker(): Promise<void> {
     await this.thread_spawner?.wait_worker_background_worker();
@@ -424,22 +425,24 @@ export class WASIFarmAnimal {
    * owner-side callers resolve after coordinator teardown and issued
    * termination operations; browser platforms do not provide a physical join.
    */
-  async async_destroy(): Promise<void> {
-    const spawner = this.thread_spawner;
-    try {
-      if (spawner !== undefined) {
-        const requester = spawner.is_managed_worker_context()
-          ? this.animal_id
-          : undefined;
-        await spawner.async_destroy(requester);
+  async_destroy(): Promise<void> {
+    return (this.destroy_promise ??= (async () => {
+      const spawner = this.thread_spawner;
+      try {
+        if (spawner !== undefined) {
+          const requester = spawner.is_managed_worker_context()
+            ? this.animal_id
+            : undefined;
+          await spawner.async_destroy(requester);
+        }
+      } finally {
+        this.inst = undefined;
+        this.wasi_farm_refs = [];
+        this.id_in_wasi_farm_ref = [];
+        this.fd_map = [];
+        this.thread_spawner = undefined;
       }
-    } finally {
-      this.inst = undefined;
-      this.wasi_farm_refs = [];
-      this.id_in_wasi_farm_ref = [];
-      this.fd_map = [];
-      this.thread_spawner = undefined;
-    }
+    })());
   }
 
   /**

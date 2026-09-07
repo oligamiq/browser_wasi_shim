@@ -82,6 +82,12 @@ handle for an external controller.
 `WASIFarmAnimal.kill_animal(animal_id)` affects only the published, registered
 Animal with that ID. Unknown, unpublished, completed, or already killed IDs are
 idempotent no-ops and do not change the runtime lifecycle.
+Returning acknowledges the request, not physical termination. The coordinator
+reserves termination, acknowledges any in-flight command, and waits for short
+shared-memory updates to release ownership before terminating the captured
+Worker. This also permits a Worker to request its own termination without
+abandoning the command lock. Sibling Workers remain usable after an individual
+kill; runtime-wide completion and destruction still stop the applicable Workers.
 
 The Park-specific methods remain separate: `destroy_park(n)` destroys one
 referenced Park, `destroy_park_all()` destroys all referenced Parks, and
