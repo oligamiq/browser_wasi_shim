@@ -92,6 +92,10 @@ export class ThreadSpawner {
   private worker_background_readiness_error?: WorkerDestroyError;
   private reject_worker_background_worker?: (reason?: unknown) => void;
   private destroy_promise?: Promise<void>;
+  private readonly destroyer_handles = new Map<
+    number | undefined,
+    DestroyerHandle
+  >();
   private coordinator_failure?: WorkerDestroyError;
   readonly owns_worker_background_worker: boolean;
 
@@ -343,11 +347,16 @@ export class ThreadSpawner {
     const requester = this.is_managed_worker_context()
       ? requesterAnimalId
       : undefined;
-    return new DestroyerHandle(
-      this.worker_background_ref,
-      this.destroy_status,
-      requester,
-    );
+    let handle = this.destroyer_handles.get(requester);
+    if (handle === undefined) {
+      handle = new DestroyerHandle(
+        this.worker_background_ref,
+        this.destroy_status,
+        requester,
+      );
+      this.destroyer_handles.set(requester, handle);
+    }
+    return handle;
   }
 
   is_managed_worker_context(): boolean {

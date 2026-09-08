@@ -90,8 +90,13 @@ export class DestroyerHandle {
       await waitForRequesterDrained(view);
       setTimeout(() => {
         markRequesterClosing(view);
-        const close = Reflect.get(globalThis, "close");
-        if (typeof close === "function") close.call(globalThis);
+        try {
+          const close = Reflect.get(globalThis, "close");
+          if (typeof close === "function") close.call(globalThis);
+        } catch (error) {
+          // Closing already lets the coordinator terminate this requester.
+          console.error("requester self-close failed", error);
+        }
       }, 0);
     })();
     return this.requester_shutdown;

@@ -1481,10 +1481,13 @@ export class WASIFarmAnimal {
         }
 
         // Perform the wait
+        // The 0.4.2 dependency omits precision and reads flags at the wrong offset.
+        const precision = buffer.getBigUint64(in_ptr + 32, true);
+        const flags = buffer.getUint16(in_ptr + 40, true);
         const endTime =
-          (s.flags & wasi.SUBCLOCKFLAGS_SUBSCRIPTION_CLOCK_ABSTIME) !== 0
+          ((flags & wasi.SUBCLOCKFLAGS_SUBSCRIPTION_CLOCK_ABSTIME) !== 0
             ? timeout
-            : getNow() + timeout;
+            : getNow() + timeout) - precision;
         // Recalculate remaining time right before blocking to account for
         // overhead incurred during subscription parsing and clock selection.
         const remainingNs = endTime - getNow();
