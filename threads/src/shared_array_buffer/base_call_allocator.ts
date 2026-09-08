@@ -1,10 +1,27 @@
 const DEFAULT_BYTE_LENGTH = 10 * 1024 * 1024;
 const MIN_BYTE_LENGTH = 64;
 const MAX_BYTE_LENGTH = 0x7ffffff8;
-const GLOBAL_HEADER_BYTES = 16;
-const BLOCK_HEADER_BYTES = 16;
-const MIN_BLOCK_PAYLOAD_BYTES = 8;
+const GLOBAL_HEADER_BYTES = 32;
+const EXTENT_WORDS = 4;
+const EXTENT_BYTES = EXTENT_WORDS * Int32Array.BYTES_PER_ELEMENT;
+const MIN_EXTENT_BYTES = 8;
+const MAX_EXTENT_COUNT = 2056;
 const MAGIC = 0x42434132;
+const VERSION = 1;
+
+const LOCK_WORD = 0;
+const ACTIVE_ALLOCATION_WORD = 1;
+const NEXT_FIT_WORD = 2;
+const MAGIC_WORD = 3;
+const EXTENT_COUNT_WORD = 4;
+const EXTENT_CAPACITY_WORD = 5;
+const DATA_START_WORD = 6;
+const VERSION_WORD = 7;
+
+const EXTENT_OFFSET = 0;
+const EXTENT_CAPACITY = 1;
+const EXTENT_REQUESTED_LENGTH = 2;
+const EXTENT_FREE = 3;
 
 /**
  * Cloneable shared state for a base-call allocator.
@@ -17,10 +34,14 @@ export type BaseCallAllocatorUseArrayBufferObject = {
 };
 
 /**
- * Concurrent first-fit allocator for base-call payloads.
+ * Concurrent allocator for base-call payloads.
  *
- * Metadata operations briefly block on a shared lock. A successful write gives
- * the caller ownership of its pointer/length pair until exactly one `free`.
+ * The buffer contains a fixed-size extent table followed by payload storage.
+ * Extents stay sorted and contiguous, allocation uses a next-fit cursor, and
+ * freeing immediately coalesces adjacent free extents. Metadata operations
+ * briefly hold one shared lock; payload copies happen after the lock is
+ * released. Callers must retain ownership until pending reads finish. Pairs
+ * have no generation: a stale pair can identify a later allocation after reuse.
  */
 export class BaseCallAllocatorUseArrayBuffer {
   /** Shared storage; direct mutation does not change allocation ownership. */
@@ -42,21 +63,44 @@ export class BaseCallAllocatorUseArrayBuffer {
       );
     }
 
+    const extentCapacity = Math.max(
+      1,
+      Math.min(
+        MAX_EXTENT_COUNT,
+        Math.floor(
+          (byteLength - GLOBAL_HEADER_BYTES) /
+            (EXTENT_BYTES + MIN_EXTENT_BYTES),
+        ),
+        Math.max(4, Math.floor((byteLength - GLOBAL_HEADER_BYTES) / 64)),
+      ),
+    );
+    const dataStart = GLOBAL_HEADER_BYTES + extentCapacity * EXTENT_BYTES;
+    if (dataStart + MIN_EXTENT_BYTES > byteLength) {
+      throw new RangeError("byteLength cannot hold allocator metadata");
+    }
+
     this.share_arrays_memory = new SharedArrayBuffer(byteLength);
     const words = new Int32Array(this.share_arrays_memory);
-    words[0] = 0;
-    words[1] = GLOBAL_HEADER_BYTES;
-    words[2] = 0;
-    words[3] = MAGIC;
-    words[4] = byteLength - GLOBAL_HEADER_BYTES - BLOCK_HEADER_BYTES;
-    words[5] = 0;
-    words[6] = 1;
-    words[7] = 0;
+    words[LOCK_WORD] = 0;
+    words[ACTIVE_ALLOCATION_WORD] = 0;
+    words[NEXT_FIT_WORD] = 0;
+    words[MAGIC_WORD] = MAGIC;
+    words[EXTENT_COUNT_WORD] = 1;
+    words[EXTENT_CAPACITY_WORD] = extentCapacity;
+    words[DATA_START_WORD] = dataStart;
+    words[VERSION_WORD] = VERSION;
+
+    const firstExtent = GLOBAL_HEADER_BYTES / 4;
+    words[firstExtent + EXTENT_OFFSET] = dataStart;
+    words[firstExtent + EXTENT_CAPACITY] = byteLength - dataStart;
+    words[firstExtent + EXTENT_REQUESTED_LENGTH] = 0;
+    words[firstExtent + EXTENT_FREE] = 1;
   }
 
   /**
-   * Attaches to cloned shared state without blocking or storing into it.
-   * Existing allocation ownership remains with the agents that own each pair.
+   * Validates the immutable header and attaches without acquiring the lock or
+   * storing into shared state. Existing allocation ownership remains with the
+   * agents that own each pair; incompatible or malformed headers are rejected.
    */
   static init_self(
     object: BaseCallAllocatorUseArrayBufferObject,
@@ -72,9 +116,7 @@ export class BaseCallAllocatorUseArrayBuffer {
     ) {
       throw new RangeError("allocator object has an invalid buffer size");
     }
-    if (Atomics.load(new Int32Array(memory), 3) !== MAGIC) {
-      throw new Error("allocator object has invalid magic");
-    }
+    BaseCallAllocatorUseArrayBuffer.validate_header(new Int32Array(memory));
 
     const allocator = Object.create(
       BaseCallAllocatorUseArrayBuffer.prototype,
@@ -87,42 +129,57 @@ export class BaseCallAllocatorUseArrayBuffer {
   }
 
   /**
-   * Blocks the current agent while allocator metadata is locked, then copies
-   * `data`. The caller owns the returned pair and must release it with `free`.
+   * Snapshots `data` before blocking on allocator metadata. The caller owns the
+   * returned pair and must release it with `free`. Invalid input or a failed
+   * payload copy leaves no new allocation owned by the caller.
    */
   block_write(data: Uint8Array): [pointer: number, length: number] {
-    if (data.byteLength === 0) {
+    const snapshot = new Uint8Array(data);
+    if (snapshot.byteLength === 0) {
       return [0, 0];
     }
 
     const allocation = this.with_blocking_lock((words) =>
-      this.reserve_locked(words, data.byteLength),
+      this.reserve_locked(words, snapshot.byteLength),
     );
-    new Uint8Array(this.share_arrays_memory).set(data, allocation[0]);
+    try {
+      new Uint8Array(this.share_arrays_memory, ...allocation).set(snapshot);
+    } catch (error) {
+      this.free(...allocation);
+      throw error;
+    }
     return allocation;
   }
 
   /**
-   * Asynchronously waits for allocator metadata, then copies `data`. The caller
-   * owns the returned pair and must release it exactly once with `free`.
+   * Snapshots `data` before asynchronously waiting for allocator metadata. The
+   * caller owns the returned pair and must release it exactly once with `free`
+   * or `async_free`. A failed payload copy releases its reservation first.
    */
   async async_write(
     data: Uint8Array,
   ): Promise<[pointer: number, length: number]> {
-    if (data.byteLength === 0) {
+    const snapshot = new Uint8Array(data);
+    if (snapshot.byteLength === 0) {
       return [0, 0];
     }
 
     const allocation = await this.with_async_lock((words) =>
-      this.reserve_locked(words, data.byteLength),
+      this.reserve_locked(words, snapshot.byteLength),
     );
-    new Uint8Array(this.share_arrays_memory).set(data, allocation[0]);
+    try {
+      new Uint8Array(this.share_arrays_memory, ...allocation).set(snapshot);
+    } catch (error) {
+      await this.async_free(...allocation);
+      throw error;
+    }
     return allocation;
   }
 
   /**
    * Blocks briefly to validate an owned allocation, then returns an independent
-   * copy. Reading does not transfer or release the caller's allocation.
+   * copy. Reading does not transfer or release the caller's allocation; no other
+   * agent may free or reuse it while the read is in progress.
    */
   get_memory(pointer: number, length: number): ArrayBuffer {
     if (pointer === 0 && length === 0) {
@@ -130,7 +187,30 @@ export class BaseCallAllocatorUseArrayBuffer {
     }
 
     this.with_blocking_lock((words) => {
-      this.find_allocated_block(words, pointer, length);
+      this.find_allocated_extent(words, pointer, length);
+    });
+    const copy = new ArrayBuffer(length);
+    new Uint8Array(copy).set(
+      new Uint8Array(this.share_arrays_memory, pointer, length),
+    );
+    return copy;
+  }
+
+  /**
+   * Asynchronously validates an owned allocation and returns an independent
+   * copy without blocking the current agent while waiting for metadata. The
+   * caller must not free or reuse the pair until this read settles.
+   */
+  async async_get_memory(
+    pointer: number,
+    length: number,
+  ): Promise<ArrayBuffer> {
+    if (pointer === 0 && length === 0) {
+      return new ArrayBuffer(0);
+    }
+
+    await this.with_async_lock((words) => {
+      this.find_allocated_extent(words, pointer, length);
     });
     const copy = new ArrayBuffer(length);
     new Uint8Array(copy).set(
@@ -149,41 +229,21 @@ export class BaseCallAllocatorUseArrayBuffer {
     }
 
     this.with_blocking_lock((words) => {
-      const blockOffset = this.find_allocated_block(words, pointer, length);
-      const blockWord = blockOffset / 4;
-      const nextOffset = words[blockWord + 1];
-      if (nextOffset !== 0) {
-        this.validate_block(words, nextOffset);
-      }
+      this.release_locked(words, pointer, length);
+    });
+  }
 
-      words[blockWord + 2] = 1;
-      words[blockWord + 3] = 0;
-      Atomics.sub(words, 2, 1);
+  /**
+   * Asynchronously releases an owned allocation without blocking the current
+   * agent while waiting for metadata.
+   */
+  async async_free(pointer: number, length: number): Promise<void> {
+    if (pointer === 0 && length === 0) {
+      return;
+    }
 
-      if (nextOffset !== 0) {
-        const nextWord = nextOffset / 4;
-        if (words[nextWord + 2] === 1) {
-          words[blockWord] += BLOCK_HEADER_BYTES + words[nextWord];
-          words[blockWord + 1] = words[nextWord + 1];
-        }
-      }
-
-      let previousOffset = 0;
-      let currentOffset = words[1];
-      while (currentOffset !== 0 && currentOffset !== blockOffset) {
-        previousOffset = currentOffset;
-        currentOffset = words[currentOffset / 4 + 1];
-      }
-      if (currentOffset === 0) {
-        throw new Error("corrupt allocator block list");
-      }
-      if (previousOffset !== 0) {
-        const previousWord = previousOffset / 4;
-        if (words[previousWord + 2] === 1) {
-          words[previousWord] += BLOCK_HEADER_BYTES + words[blockWord];
-          words[previousWord + 1] = words[blockWord + 1];
-        }
-      }
+    await this.with_async_lock((words) => {
+      this.release_locked(words, pointer, length);
     });
   }
 
@@ -199,37 +259,47 @@ export class BaseCallAllocatorUseArrayBuffer {
     words: Int32Array,
     length: number,
   ): [pointer: number, length: number] {
-    const alignedLength = Math.ceil(length / 8) * 8;
-    let blockOffset = words[1];
+    if (!Number.isInteger(length) || length <= 0 || length > MAX_BYTE_LENGTH) {
+      throw new RangeError("invalid allocation length");
+    }
+    this.validate_metadata(words);
+    const alignedLength =
+      Math.ceil(length / MIN_EXTENT_BYTES) * MIN_EXTENT_BYTES;
+    const extentCount = words[EXTENT_COUNT_WORD];
+    const start = words[NEXT_FIT_WORD] % extentCount;
 
-    while (blockOffset !== 0) {
-      this.validate_block(words, blockOffset);
-      const blockWord = blockOffset / 4;
-      const payloadSize = words[blockWord];
-      const nextOffset = words[blockWord + 1];
-      const isFree = words[blockWord + 2] === 1;
-
-      if (isFree && payloadSize >= alignedLength) {
-        const remainder = payloadSize - alignedLength;
-        if (remainder >= BLOCK_HEADER_BYTES + MIN_BLOCK_PAYLOAD_BYTES) {
-          const splitOffset = blockOffset + BLOCK_HEADER_BYTES + alignedLength;
-          const splitWord = splitOffset / 4;
-          words[splitWord] = remainder - BLOCK_HEADER_BYTES;
-          words[splitWord + 1] = nextOffset;
-          words[splitWord + 2] = 1;
-          words[splitWord + 3] = 0;
-          words[blockWord] = alignedLength;
-          words[blockWord + 1] = splitOffset;
-        }
-
-        words[blockWord + 2] = 0;
-        words[blockWord + 3] = length;
-        Atomics.add(words, 2, 1);
-        const pointer = blockOffset + BLOCK_HEADER_BYTES;
-        return [pointer, length];
+    for (let scanned = 0; scanned < extentCount; scanned++) {
+      const extentIndex = (start + scanned) % extentCount;
+      const extentWord = this.extent_word(extentIndex);
+      const extentCapacity = words[extentWord + EXTENT_CAPACITY];
+      if (
+        words[extentWord + EXTENT_FREE] !== 1 ||
+        extentCapacity < alignedLength
+      ) {
+        continue;
       }
 
-      blockOffset = nextOffset;
+      const remainder = extentCapacity - alignedLength;
+      if (
+        remainder >= MIN_EXTENT_BYTES &&
+        extentCount < words[EXTENT_CAPACITY_WORD]
+      ) {
+        this.insert_extent(words, extentIndex + 1);
+        const splitWord = this.extent_word(extentIndex + 1);
+        words[splitWord + EXTENT_OFFSET] =
+          words[extentWord + EXTENT_OFFSET] + alignedLength;
+        words[splitWord + EXTENT_CAPACITY] = remainder;
+        words[splitWord + EXTENT_REQUESTED_LENGTH] = 0;
+        words[splitWord + EXTENT_FREE] = 1;
+        words[extentWord + EXTENT_CAPACITY] = alignedLength;
+      }
+
+      words[extentWord + EXTENT_FREE] = 0;
+      words[extentWord + EXTENT_REQUESTED_LENGTH] = length;
+      Atomics.add(words, ACTIVE_ALLOCATION_WORD, 1);
+      words[NEXT_FIT_WORD] =
+        extentIndex + 1 < words[EXTENT_COUNT_WORD] ? extentIndex + 1 : 0;
+      return [words[extentWord + EXTENT_OFFSET], length];
     }
 
     throw new RangeError("base call allocator is out of memory");
@@ -237,15 +307,18 @@ export class BaseCallAllocatorUseArrayBuffer {
 
   private with_blocking_lock<T>(operation: (words: Int32Array) => T): T {
     const words = new Int32Array(this.share_arrays_memory);
-    while (Atomics.compareExchange(words, 0, 0, 1) !== 0) {
-      Atomics.wait(words, 0, 1);
+    for (;;) {
+      const previous = Atomics.compareExchange(words, LOCK_WORD, 0, 1);
+      if (previous === 0) break;
+      if (previous !== 1) throw new Error("corrupt allocator lock");
+      Atomics.wait(words, LOCK_WORD, 1);
     }
 
     try {
       return operation(words);
     } finally {
-      Atomics.store(words, 0, 0);
-      Atomics.notify(words, 0, 1);
+      Atomics.store(words, LOCK_WORD, 0);
+      Atomics.notify(words, LOCK_WORD, 1);
     }
   }
 
@@ -253,8 +326,11 @@ export class BaseCallAllocatorUseArrayBuffer {
     operation: (words: Int32Array) => T,
   ): Promise<T> {
     const words = new Int32Array(this.share_arrays_memory);
-    while (Atomics.compareExchange(words, 0, 0, 1) !== 0) {
-      const waiter = Atomics.waitAsync(words, 0, 1).value;
+    for (;;) {
+      const previous = Atomics.compareExchange(words, LOCK_WORD, 0, 1);
+      if (previous === 0) break;
+      if (previous !== 1) throw new Error("corrupt allocator lock");
+      const waiter = Atomics.waitAsync(words, LOCK_WORD, 1).value;
       if (waiter instanceof Promise) {
         await waiter;
       }
@@ -263,75 +339,196 @@ export class BaseCallAllocatorUseArrayBuffer {
     try {
       return operation(words);
     } finally {
-      Atomics.store(words, 0, 0);
-      Atomics.notify(words, 0, 1);
+      Atomics.store(words, LOCK_WORD, 0);
+      Atomics.notify(words, LOCK_WORD, 1);
     }
   }
 
-  private find_allocated_block(
+  private find_allocated_extent(
     words: Int32Array,
     pointer: number,
     length: number,
   ): number {
+    this.validate_metadata(words);
     if (
       !Number.isInteger(pointer) ||
       !Number.isInteger(length) ||
-      pointer < GLOBAL_HEADER_BYTES + BLOCK_HEADER_BYTES ||
-      pointer % 8 !== 0 ||
+      pointer < words[DATA_START_WORD] ||
+      pointer % MIN_EXTENT_BYTES !== 0 ||
       length <= 0 ||
       pointer + length > this.share_arrays_memory.byteLength
     ) {
       throw new RangeError("invalid allocation range");
     }
 
-    let blockOffset = words[1];
-    while (blockOffset !== 0) {
-      this.validate_block(words, blockOffset);
-      const blockWord = blockOffset / 4;
-      if (blockOffset + BLOCK_HEADER_BYTES === pointer) {
-        if (words[blockWord + 2] !== 0) {
-          throw new Error("allocation has already been freed");
-        }
-        if (words[blockWord + 3] !== length) {
-          throw new RangeError("allocation length does not match");
-        }
-        return blockOffset;
+    const extentCount = words[EXTENT_COUNT_WORD];
+    for (let extentIndex = 0; extentIndex < extentCount; extentIndex++) {
+      const extentWord = this.extent_word(extentIndex);
+      if (words[extentWord + EXTENT_OFFSET] !== pointer) {
+        continue;
       }
-      blockOffset = words[blockWord + 1];
+      if (words[extentWord + EXTENT_FREE] !== 0) {
+        throw new Error("allocation has already been freed");
+      }
+      if (words[extentWord + EXTENT_REQUESTED_LENGTH] !== length) {
+        throw new RangeError("allocation length does not match");
+      }
+      return extentIndex;
     }
 
     throw new RangeError("allocation pointer was not found");
   }
 
-  private validate_block(words: Int32Array, blockOffset: number): void {
+  private static validate_header(words: Int32Array): void {
+    if (Atomics.load(words, MAGIC_WORD) !== MAGIC) {
+      throw new Error("allocator object has invalid magic");
+    }
+    const version = Atomics.load(words, VERSION_WORD);
+    const extentCapacity = Atomics.load(words, EXTENT_CAPACITY_WORD);
+    const dataStart = Atomics.load(words, DATA_START_WORD);
     if (
-      blockOffset < GLOBAL_HEADER_BYTES ||
-      blockOffset % 8 !== 0 ||
-      blockOffset + BLOCK_HEADER_BYTES > this.share_arrays_memory.byteLength
+      version !== VERSION ||
+      extentCapacity < 1 ||
+      extentCapacity > MAX_EXTENT_COUNT ||
+      dataStart !== GLOBAL_HEADER_BYTES + extentCapacity * EXTENT_BYTES ||
+      dataStart % MIN_EXTENT_BYTES !== 0 ||
+      dataStart + MIN_EXTENT_BYTES > words.buffer.byteLength
     ) {
-      throw new Error("corrupt allocator block offset");
+      throw new Error("corrupt allocator metadata");
+    }
+  }
+
+  private validate_metadata(words: Int32Array): void {
+    BaseCallAllocatorUseArrayBuffer.validate_header(words);
+
+    const extentCount = words[EXTENT_COUNT_WORD];
+    if (
+      extentCount < 1 ||
+      extentCount > words[EXTENT_CAPACITY_WORD] ||
+      words[NEXT_FIT_WORD] < 0 ||
+      words[NEXT_FIT_WORD] >= extentCount ||
+      words[ACTIVE_ALLOCATION_WORD] < 0 ||
+      words[ACTIVE_ALLOCATION_WORD] > extentCount
+    ) {
+      throw new Error("corrupt allocator metadata");
     }
 
-    const blockWord = blockOffset / 4;
-    const payloadSize = words[blockWord];
-    const nextOffset = words[blockWord + 1];
-    const freeFlag = words[blockWord + 2];
-    const requestedLength = words[blockWord + 3];
-    const hasInvalidAllocationState =
-      (freeFlag !== 0 && freeFlag !== 1) ||
-      (freeFlag === 1 && requestedLength !== 0) ||
-      (freeFlag === 0 &&
-        (requestedLength < 1 || requestedLength > payloadSize));
+    let expectedOffset = words[DATA_START_WORD];
+    let activeAllocations = 0;
+    for (let extentIndex = 0; extentIndex < extentCount; extentIndex++) {
+      const extentWord = this.extent_word(extentIndex);
+      const offset = words[extentWord + EXTENT_OFFSET];
+      const capacity = words[extentWord + EXTENT_CAPACITY];
+      const requestedLength = words[extentWord + EXTENT_REQUESTED_LENGTH];
+      const free = words[extentWord + EXTENT_FREE];
+      if (
+        offset !== expectedOffset ||
+        offset % MIN_EXTENT_BYTES !== 0 ||
+        capacity < MIN_EXTENT_BYTES ||
+        capacity % MIN_EXTENT_BYTES !== 0 ||
+        offset + capacity > this.share_arrays_memory.byteLength ||
+        (free !== 0 && free !== 1) ||
+        (free === 1 && requestedLength !== 0) ||
+        (free === 0 && (requestedLength < 1 || requestedLength > capacity))
+      ) {
+        throw new Error("corrupt allocator extent table");
+      }
+      if (free === 0) {
+        activeAllocations++;
+      }
+      if (
+        extentIndex > 0 &&
+        free === 1 &&
+        words[this.extent_word(extentIndex - 1) + EXTENT_FREE] === 1
+      ) {
+        throw new Error("corrupt allocator extent table");
+      }
+      expectedOffset += capacity;
+    }
     if (
-      payloadSize < MIN_BLOCK_PAYLOAD_BYTES ||
-      payloadSize % 8 !== 0 ||
-      blockOffset + BLOCK_HEADER_BYTES + payloadSize >
-        this.share_arrays_memory.byteLength ||
-      (nextOffset !== 0 &&
-        nextOffset !== blockOffset + BLOCK_HEADER_BYTES + payloadSize) ||
-      hasInvalidAllocationState
+      expectedOffset !== this.share_arrays_memory.byteLength ||
+      activeAllocations !== words[ACTIVE_ALLOCATION_WORD]
     ) {
-      throw new Error("corrupt allocator block header");
+      throw new Error("corrupt allocator extent table");
+    }
+
+    for (
+      let extentIndex = extentCount;
+      extentIndex < words[EXTENT_CAPACITY_WORD];
+      extentIndex++
+    ) {
+      const extentWord = this.extent_word(extentIndex);
+      if (
+        words[extentWord + EXTENT_OFFSET] !== 0 ||
+        words[extentWord + EXTENT_CAPACITY] !== 0 ||
+        words[extentWord + EXTENT_REQUESTED_LENGTH] !== 0 ||
+        words[extentWord + EXTENT_FREE] !== 0
+      ) {
+        throw new Error("corrupt allocator extent table");
+      }
+    }
+  }
+
+  private insert_extent(words: Int32Array, extentIndex: number): void {
+    const extentCount = words[EXTENT_COUNT_WORD];
+    for (let index = extentCount; index > extentIndex; index--) {
+      const destination = this.extent_word(index);
+      const source = this.extent_word(index - 1);
+      words.copyWithin(destination, source, source + EXTENT_WORDS);
+    }
+    words[EXTENT_COUNT_WORD] = extentCount + 1;
+  }
+
+  private remove_extent(words: Int32Array, extentIndex: number): void {
+    const extentCount = words[EXTENT_COUNT_WORD];
+    for (let index = extentIndex; index < extentCount - 1; index++) {
+      const destination = this.extent_word(index);
+      const source = this.extent_word(index + 1);
+      words.copyWithin(destination, source, source + EXTENT_WORDS);
+    }
+    const last = this.extent_word(extentCount - 1);
+    words.fill(0, last, last + EXTENT_WORDS);
+    words[EXTENT_COUNT_WORD] = extentCount - 1;
+    if (words[NEXT_FIT_WORD] > extentIndex) {
+      words[NEXT_FIT_WORD]--;
+    }
+  }
+
+  private extent_word(extentIndex: number): number {
+    return GLOBAL_HEADER_BYTES / 4 + extentIndex * EXTENT_WORDS;
+  }
+
+  private release_locked(
+    words: Int32Array,
+    pointer: number,
+    length: number,
+  ): void {
+    let extentIndex = this.find_allocated_extent(words, pointer, length);
+    const extentWord = this.extent_word(extentIndex);
+    words[extentWord + EXTENT_FREE] = 1;
+    words[extentWord + EXTENT_REQUESTED_LENGTH] = 0;
+    Atomics.sub(words, ACTIVE_ALLOCATION_WORD, 1);
+
+    if (extentIndex + 1 < words[EXTENT_COUNT_WORD]) {
+      const nextWord = this.extent_word(extentIndex + 1);
+      if (words[nextWord + EXTENT_FREE] === 1) {
+        words[extentWord + EXTENT_CAPACITY] +=
+          words[nextWord + EXTENT_CAPACITY];
+        this.remove_extent(words, extentIndex + 1);
+      }
+    }
+
+    if (extentIndex > 0) {
+      const previousWord = this.extent_word(extentIndex - 1);
+      if (words[previousWord + EXTENT_FREE] === 1) {
+        words[previousWord + EXTENT_CAPACITY] +=
+          words[extentWord + EXTENT_CAPACITY];
+        this.remove_extent(words, extentIndex);
+      }
+    }
+
+    if (words[NEXT_FIT_WORD] >= words[EXTENT_COUNT_WORD]) {
+      words[NEXT_FIT_WORD] = 0;
     }
   }
 }

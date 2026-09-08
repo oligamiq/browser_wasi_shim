@@ -279,31 +279,81 @@ Payload ownership is determined by slot state:
 | --- | --- | --- |
 | `WRITING` | Caller | None |
 | `READY` | Park transport | None |
-| `RUNNING` | Already copied and freed | Handler until publication |
+| `RUNNING` | Park until request copy/free completes, then none | Park until publication |
 | `DONE` | None | Caller |
 | `ERROR` | None | Caller |
-| `CANCELLED` | None | None |
+| `CANCELLED` | Previous owner until pending cleanup completes | Park for unpublished result cleanup |
 
 The caller owns request memory until publishing `READY`. The Park then owns it
 and must copy and free it exactly once. The Park owns a result allocation until
 a successful terminal-state publication. The caller owns a published result
 and frees it even when decoding throws.
 
-The base transport uses a dedicated concurrent free-list allocator so fd
-payload pressure cannot strand lifecycle and unknown-function calls. The v1
+The Park and asynchronous callers use asynchronous allocator operations for
+payload reads, writes, and cleanup. Claiming a slot captures its generation and
+pointer/length pair before any await. Cancellation wakes the caller immediately
+but does not release ownership of a captured allocation: the Park completes any
+pending request cleanup, and a caller cancelled while `WRITING` cleans up its
+own request. A terminal response slot remains caller-owned until reading and
+freeing its payload finish. Late results are freed without publishing into a
+cancelled or reused slot.
+
+The base transport uses a dedicated concurrent fixed extent-table allocator so
+fd payload pressure cannot strand lifecycle and unknown-function calls. The v1
 bump allocator is not reused because interleaved request and response lifetimes
 prevent it from reclaiming individual blocks.
 
-The free-list allocator retains the existing pointer/length transfer API. Its
-metadata is protected by one short allocator lock; that lock is never held
-while a host handler runs. Blocks are aligned to eight bytes, split on
-allocation when the remainder can hold a valid block, and coalesced with
-adjacent free blocks on release. Allocation and release validate bounds,
-alignment, allocation state, and duplicate frees.
+The extent-table allocator retains the existing pointer/length transfer API.
+Its metadata is protected by one short allocator lock; that lock is never held
+while a host handler runs. Extents are aligned to eight bytes, allocation uses
+next-fit, and immediate coalescing keeps adjacent free extents together.
+Allocation and release validate bounds, alignment, allocation state, and
+duplicate frees before reuse. The pointer/length API has no allocation
+generation: after an extent is freed and reused with the same requested length,
+a stale pair can identify the new allocation. Callers must not free or reuse an
+allocation during a pending read (including `async_get_memory`); validation is
+locked, but copying the payload is not. Transport slot generations do not make
+allocator pairs generation-safe.
+
+The allocator has a 32-byte header of eight `Int32` words. Its format version
+is `1`, independent of the transport's version `2`:
+
+| Word | Meaning |
+| ---: | --- |
+| 0 | Metadata lock: `0` unlocked, `1` held |
+| 1 | Active allocation count |
+| 2 | Next-fit extent index (cursor) |
+| 3 | Magic `0x42434132` |
+| 4 | Current extent count (initially `1`) |
+| 5 | Fixed extent-table capacity, from `1` through `2056` |
+| 6 | Payload start: `32 + capacity * 16` bytes |
+| 7 | Allocator format version, always `1` |
+
+Each fixed-table entry has four `Int32` words: payload offset, aligned capacity,
+requested byte length, and free flag (`1` free, `0` allocated). Unused entries
+are zeroed. The sorted extents cover all payload storage contiguously. The table
+never grows; if no entry remains for a split, allocation consumes the entire
+fitting free extent while retaining the exact requested length.
 
 Creation initializes a new buffer. `init_self()` only attaches to the existing
-SharedArrayBuffer and must not write the lock, list head, block metadata, or
-usage counters. Blocking and asynchronous lock acquisition use `try/finally`.
+SharedArrayBuffer and must not write the lock, extent-table metadata, cursor, or
+usage counters. It validates buffer size and atomically reads immutable magic,
+version, table capacity, and payload-start arithmetic before attaching. It does
+not acquire the lock or inspect the changing extent table, so a valid held lock
+does not prevent attachment. Old or malformed headers are rejected, not migrated.
+Blocking and asynchronous lock acquisition acquire only `0`, wait only on `1`,
+and reject every other lock value without mutation. Acquired locks are released
+in `finally`.
+
+Both write APIs copy input into an owned, fixed-length `Uint8Array` before any
+wait or block. Later input mutation, resize, or transfer cannot change the
+reservation or stored bytes. Already detached or out-of-bounds inputs reject
+before allocating; valid empty input retains the allocation-free `[0, 0]` pair.
+Internal reservation lengths are validated before metadata mutation. Payload
+copies use a destination view bounded to the reserved length, and a failed copy
+releases its reservation before throwing or rejecting. Concurrent mutation of
+shared input while the initial snapshot is being copied is not an atomic
+snapshot protocol; callers must synchronize that input themselves.
 Out-of-memory becomes a terminal remote error and always wakes the caller.
 
 The existing allocator and fd-close sender attachment paths are also corrected
@@ -382,8 +432,10 @@ generation.
    reloads state and retries CAS until that slot is stable. A writing slot uses
    `WRITING -> CANCELLED` and retains caller ownership of its incomplete
    request. A ready slot uses `READY -> RUNNING` to transfer ownership to the
-   Park, frees its request payload, then publishes `CANCELLED`. A running slot
-   uses `RUNNING -> CANCELLED`. Free, retired, cancelled, done, and error states
+   Park, captures its request allocation, and immediately publishes `CANCELLED`;
+   the Park then reclaims that allocation asynchronously. A running slot uses
+   `RUNNING -> CANCELLED`, with any in-progress request copy/free remaining
+   Park-owned. Free, retired, cancelled, done, and error states
    are already stable. Every affected caller is notified. Because reservation
    precedes the caller's mandatory lifecycle recheck and every transition is a
    CAS, a concurrent `WRITING -> READY` publication either loses and cleans up

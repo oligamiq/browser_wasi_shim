@@ -374,7 +374,7 @@ test("farm destroy wakes a running caller and discards late completion", async (
     await waitUntil(() => callbackFinished);
 
     assert.strictEqual(Atomics.load(slots, slotWord(1, SLOT_STATE)), FREE);
-    assert.strictEqual(Atomics.load(allocatorWords, 2), 0);
+    assert.strictEqual(Atomics.load(allocatorWords, 1), 0);
     assert.strictEqual(
       Atomics.load(slots, slotWord(1, SLOT_RESPONSE_POINTER)),
       0,
@@ -452,7 +452,7 @@ test("a force-terminated caller keeps its slot until farm destroy", async () => 
         0,
       );
     }
-    assert.strictEqual(Atomics.load(allocatorWords, 2), 0);
+    assert.strictEqual(Atomics.load(allocatorWords, 1), 0);
   } finally {
     caller.terminate();
     destroyFarm(farm);

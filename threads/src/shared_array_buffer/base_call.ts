@@ -509,8 +509,11 @@ export class BaseCallRefUseArrayBuffer {
       allocation = undefined;
     } finally {
       if (allocation !== undefined) {
-        this.allocator.free(...allocation);
-        this.releaseWritingSlot(identity);
+        try {
+          await this.allocator.async_free(...allocation);
+        } finally {
+          this.releaseWritingSlot(identity);
+        }
       }
     }
   }
@@ -589,7 +592,7 @@ export class BaseCallRefUseArrayBuffer {
     while (true) {
       const state = Atomics.load(this.slots, stateIndex);
       if (isTerminalState(state)) {
-        return this.consumeTerminal(identity, opcode, state);
+        return await this.consumeTerminalAsync(identity, opcode, state);
       }
       this.assertGeneration(identity);
       await waitAsync(this.slots, stateIndex, state);
@@ -645,6 +648,74 @@ export class BaseCallRefUseArrayBuffer {
         this.allocator.free(...ownedAllocation);
       }
       this.releaseTerminalSlot(identity, state);
+    }
+  }
+
+  private async consumeTerminalAsync(
+    identity: SlotIdentity,
+    opcode: BaseCallOpcode,
+    state: number,
+  ): Promise<Uint8Array | undefined> {
+    this.assertGeneration(identity);
+    const base = this.slotWord(identity.slotIndex, 0);
+    let ownedAllocation: [number, number] | undefined;
+    try {
+      if (state === SlotState.Cancelled) {
+        if (opcode === BaseCallOpcode.DestroyPark) {
+          return undefined;
+        }
+        throw new BaseCallTerminalFailure(BaseCallTerminalError.Destroyed);
+      }
+
+      const status = Atomics.load(this.slots, base + SLOT_FLAGS);
+      if (
+        state === SlotState.Done ||
+        status === BaseCallTerminalError.Serialized
+      ) {
+        const pointer = Atomics.load(
+          this.slots,
+          base +
+            (state === SlotState.Done
+              ? SLOT_RESPONSE_POINTER
+              : SLOT_ERROR_POINTER),
+        );
+        const length = Atomics.load(
+          this.slots,
+          base +
+            (state === SlotState.Done
+              ? SLOT_RESPONSE_LENGTH
+              : SLOT_ERROR_LENGTH),
+        );
+        if (state === SlotState.Done && pointer === 0 && length === 0) {
+          return undefined;
+        }
+        // Terminal state stays owned until both the copy and free finish.
+        ownedAllocation = [pointer, length];
+        const payload = new Uint8Array(
+          await this.allocator.async_get_memory(pointer, length),
+        );
+        if (state === SlotState.Done) {
+          return payload;
+        }
+        throw deserializeRemoteError(decodeStrictJsonValue(payload));
+      }
+      if (
+        status === BaseCallTerminalError.OutOfMemory ||
+        status === BaseCallTerminalError.InvalidRequest ||
+        status === BaseCallTerminalError.Destroyed ||
+        status === BaseCallTerminalError.CodecError
+      ) {
+        throw new BaseCallTerminalFailure(status);
+      }
+      throw new BaseCallTerminalFailure(BaseCallTerminalError.InvalidRequest);
+    } finally {
+      try {
+        if (ownedAllocation !== undefined) {
+          await this.allocator.async_free(...ownedAllocation);
+        }
+      } finally {
+        this.releaseTerminalSlot(identity, state);
+      }
     }
   }
 
@@ -799,6 +870,7 @@ export class BaseCallParkUseArrayBuffer {
   /**
    * Begins owner-side destruction once, cancelling all owned slots and waking
    * every blocked agent. It does not wait for outstanding handler Promises.
+   * Request storage may be reclaimed asynchronously after cancellation.
    */
   destroy(): void {
     this.beginDestroy();
@@ -851,43 +923,61 @@ export class BaseCallParkUseArrayBuffer {
       const opcode = Atomics.load(this.slots, base + SLOT_OPCODE);
       const pointer = Atomics.load(this.slots, base + SLOT_REQUEST_POINTER);
       const length = Atomics.load(this.slots, base + SLOT_REQUEST_LENGTH);
-      let payload: Uint8Array;
-      try {
-        payload = new Uint8Array(this.allocator.get_memory(pointer, length));
-        this.allocator.free(pointer, length);
-      } catch {
-        this.publishTerminalError(
-          identity,
-          BaseCallTerminalError.InvalidRequest,
-        );
-        continue;
-      }
-
-      if (slotIndex === SYSTEM_SLOT) {
-        if (opcode === BaseCallOpcode.DestroyPark) {
-          baseCallTestHooks.beforeWireDestroy?.();
-          if (!this.beginDestroy(identity)) {
-            this.publishSuccess(identity, undefined);
-          }
-          continue;
-        }
-        if (opcode !== BaseCallOpcode.SetParkFdsMap) {
+      void this.readAndHandleSlot(identity, opcode, pointer, length).catch(
+        () => {
           this.publishTerminalError(
             identity,
             BaseCallTerminalError.InvalidRequest,
           );
-          continue;
+        },
+      );
+    }
+    return claimed;
+  }
+
+  private async readAndHandleSlot(
+    identity: SlotIdentity,
+    opcode: BaseCallOpcode,
+    pointer: number,
+    length: number,
+  ): Promise<void> {
+    let payload: Uint8Array;
+    try {
+      payload = new Uint8Array(
+        await this.allocator.async_get_memory(pointer, length),
+      );
+    } finally {
+      // Cancellation may release the slot, but not this captured allocation.
+      await this.allocator.async_free(pointer, length);
+    }
+    if (
+      Atomics.load(this.control, CONTROL_LIFECYCLE) !==
+        TransportLifecycle.Active ||
+      !this.ownsRunningSlot(identity)
+    ) {
+      return;
+    }
+
+    if (identity.slotIndex === SYSTEM_SLOT) {
+      if (opcode === BaseCallOpcode.DestroyPark) {
+        baseCallTestHooks.beforeWireDestroy?.();
+        if (!this.beginDestroy(identity)) {
+          await this.publishSuccess(identity, undefined);
         }
-      } else if (opcode !== BaseCallOpcode.CallUnknownFn) {
+        return;
+      }
+      if (opcode !== BaseCallOpcode.SetParkFdsMap) {
         this.publishTerminalError(
           identity,
           BaseCallTerminalError.InvalidRequest,
         );
-        continue;
+        return;
       }
-      void this.handleSlot(identity, opcode, payload);
+    } else if (opcode !== BaseCallOpcode.CallUnknownFn) {
+      this.publishTerminalError(identity, BaseCallTerminalError.InvalidRequest);
+      return;
     }
-    return claimed;
+    await this.handleSlot(identity, opcode, payload);
   }
 
   private async handleSlot(
@@ -899,7 +989,7 @@ export class BaseCallParkUseArrayBuffer {
     try {
       result = await this.handler(opcode, payload);
     } catch (error) {
-      this.publishSerializedError(identity, error);
+      await this.publishSerializedError(identity, error);
       return;
     }
 
@@ -908,27 +998,27 @@ export class BaseCallParkUseArrayBuffer {
       return;
     }
     if (result === undefined || result.byteLength === 0) {
-      this.publishSuccess(identity, undefined);
+      await this.publishSuccess(identity, undefined);
       return;
     }
 
     let allocation: [number, number];
     try {
-      allocation = this.allocator.block_write(result);
+      allocation = await this.allocator.async_write(result);
     } catch {
       this.publishTerminalError(identity, BaseCallTerminalError.OutOfMemory);
       return;
     }
-    this.publishSuccess(identity, allocation);
+    await this.publishSuccess(identity, allocation);
   }
 
-  private publishSuccess(
+  private async publishSuccess(
     identity: SlotIdentity,
     allocation: [number, number] | undefined,
-  ): void {
+  ): Promise<void> {
     if (!this.ownsRunningSlot(identity)) {
       if (allocation !== undefined) {
-        this.allocator.free(...allocation);
+        await this.allocator.async_free(...allocation);
       }
       return;
     }
@@ -948,12 +1038,15 @@ export class BaseCallParkUseArrayBuffer {
     Atomics.store(this.slots, base + SLOT_ERROR_LENGTH, 0);
     if (!this.publishTerminalState(identity, SlotState.Done)) {
       if (allocation !== undefined) {
-        this.allocator.free(...allocation);
+        await this.allocator.async_free(...allocation);
       }
     }
   }
 
-  private publishSerializedError(identity: SlotIdentity, error: unknown): void {
+  private async publishSerializedError(
+    identity: SlotIdentity,
+    error: unknown,
+  ): Promise<void> {
     if (!this.ownsRunningSlot(identity)) {
       return;
     }
@@ -966,14 +1059,14 @@ export class BaseCallParkUseArrayBuffer {
     }
     let allocation: [number, number];
     try {
-      allocation = this.allocator.block_write(encoded);
+      allocation = await this.allocator.async_write(encoded);
     } catch {
       this.publishTerminalError(identity, BaseCallTerminalError.OutOfMemory);
       return;
     }
 
     if (!this.ownsRunningSlot(identity)) {
-      this.allocator.free(...allocation);
+      await this.allocator.async_free(...allocation);
       return;
     }
 
@@ -988,7 +1081,7 @@ export class BaseCallParkUseArrayBuffer {
     Atomics.store(this.slots, base + SLOT_ERROR_POINTER, allocation[0]);
     Atomics.store(this.slots, base + SLOT_ERROR_LENGTH, allocation[1]);
     if (!this.publishTerminalState(identity, SlotState.Error)) {
-      this.allocator.free(...allocation);
+      await this.allocator.async_free(...allocation);
     }
   }
 
@@ -1086,7 +1179,7 @@ export class BaseCallParkUseArrayBuffer {
     }
 
     if (origin !== undefined) {
-      this.publishSuccess(origin, undefined);
+      this.publishTerminalState(origin, SlotState.Done);
     }
     return true;
   }
@@ -1129,6 +1222,7 @@ export class BaseCallParkUseArrayBuffer {
         ) {
           continue;
         }
+        // Capture before waking the caller, which can clear/reuse the slot.
         const pointer = Atomics.load(
           this.slots,
           this.slotWord(slotIndex, SLOT_REQUEST_POINTER),
@@ -1137,13 +1231,11 @@ export class BaseCallParkUseArrayBuffer {
           this.slots,
           this.slotWord(slotIndex, SLOT_REQUEST_LENGTH),
         );
-        try {
-          this.allocator.free(pointer, length);
-        } catch {
-          // The slot is still cancelled even if malformed request metadata exists.
-        }
         Atomics.store(this.slots, stateIndex, SlotState.Cancelled);
         Atomics.notify(this.slots, stateIndex);
+        void this.allocator.async_free(pointer, length).catch(() => {
+          // Malformed request metadata must not prevent cancellation or wakeups.
+        });
         return;
       }
       return;

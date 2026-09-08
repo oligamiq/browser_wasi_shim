@@ -582,7 +582,7 @@ test("allocator OOM publishes an allocation-free terminal error", async () => {
       ref.async_call(BaseCallOpcode.CallUnknownFn, new Uint8Array([1])),
       (reason) => /OutOfMemory/i.test(terminalMessage(reason)),
     );
-    assert.strictEqual(Atomics.load(allocatorWords, 2), 0);
+    assert.strictEqual(Atomics.load(allocatorWords, 1), 0);
   } finally {
     park.destroy();
   }
@@ -616,7 +616,7 @@ test("user request OOM releases Writing and wakes a capacity waiter", async () =
     await assert.rejects(within(exhausted), /OutOfMemory/i);
     assert.deepStrictEqual(Array.from((await within(waiting)) ?? []), [7]);
     assert.strictEqual(Atomics.load(slots, stateIndex), FREE);
-    assert.strictEqual(Atomics.load(allocatorWords, 2), 0);
+    assert.strictEqual(Atomics.load(allocatorWords, 1), 0);
   } finally {
     Atomics.store(allocatorWords, 0, 0);
     Atomics.notify(allocatorWords, 0);
@@ -641,7 +641,7 @@ test("system request OOM releases Writing for later system reuse", async () => {
       /OutOfMemory/i,
     );
     assert.strictEqual(Atomics.load(slots, SLOT_STATE), FREE);
-    assert.strictEqual(Atomics.load(allocatorWords, 2), 0);
+    assert.strictEqual(Atomics.load(allocatorWords, 1), 0);
 
     park.listen();
     assert.deepStrictEqual(
@@ -737,7 +737,7 @@ test("publication rechecks lifecycle after a destroy scan misses its claim", asy
 
     await assert.rejects(within(call), /Destroyed/i);
     assert.strictEqual(Atomics.load(slots, stateIndex), FREE);
-    assert.strictEqual(Atomics.load(allocatorWords, 2), 0);
+    assert.strictEqual(Atomics.load(allocatorWords, 1), 0);
   } finally {
     if (Atomics.load(slots, stateIndex) !== FREE) {
       Atomics.store(slots, stateIndex, CANCELLED);
@@ -802,7 +802,7 @@ test("malformed transport objects are rejected without mutation", () => {
   }
 });
 
-test("destroy cancels writing and ready slots and frees owned requests", () => {
+test("destroy cancels writing and ready slots and frees owned requests", async () => {
   for (const state of [WRITING, READY]) {
     let beganDestroy = 0;
     const park = new BaseCallParkUseArrayBuffer(() => undefined, {
@@ -833,9 +833,12 @@ test("destroy cancels writing and ready slots and frees owned requests", () => {
       DESTROYED,
     );
     assert.strictEqual(beganDestroy, 1);
-    assert.strictEqual(
-      Atomics.load(new Int32Array(object.allocator.share_arrays_memory), 2),
-      state === WRITING ? 0 : 0,
+    await waitUntil(
+      () =>
+        Atomics.load(
+          new Int32Array(object.allocator.share_arrays_memory),
+          1,
+        ) === 0,
     );
   }
 });
@@ -864,7 +867,7 @@ test("destroy cancels running calls and discards late completion", async () => {
     new Uint8Array([1]),
   );
 
-  await waitUntil(() => Atomics.load(slots, stateIndex) === RUNNING);
+  await waitUntil(() => resolveHandler !== undefined);
   park.destroy();
   await assert.rejects(call, /Destroyed/i);
   resolveHandler?.(new Uint8Array([9]));
@@ -873,7 +876,7 @@ test("destroy cancels running calls and discards late completion", async () => {
   assert.strictEqual(beganDestroy, 1);
   assert.strictEqual(Atomics.load(slots, stateIndex), FREE);
   assert.strictEqual(
-    Atomics.load(new Int32Array(object.allocator.share_arrays_memory), 2),
+    Atomics.load(new Int32Array(object.allocator.share_arrays_memory), 1),
     0,
   );
 });
@@ -904,7 +907,7 @@ test("wire destroy is idempotent when owner destroy wins while Writing", async (
     assert.strictEqual(await within(wireDestroy), undefined);
     assert.strictEqual(hookCalls, 1);
     assert.strictEqual(Atomics.load(slots, SLOT_STATE), FREE);
-    assert.strictEqual(Atomics.load(allocatorWords, 2), 0);
+    assert.strictEqual(Atomics.load(allocatorWords, 1), 0);
   } finally {
     baseCallTestHooks.beforeRequestPublication = undefined;
     park.destroy();
@@ -938,7 +941,7 @@ test("non-destroy publication still rejects when owner wins while Writing", asyn
     await assert.rejects(within(call), /Destroyed/i);
     assert.strictEqual(hookCalls, 1);
     assert.strictEqual(Atomics.load(slots, SLOT_STATE), FREE);
-    assert.strictEqual(Atomics.load(allocatorWords, 2), 0);
+    assert.strictEqual(Atomics.load(allocatorWords, 1), 0);
   } finally {
     baseCallTestHooks.beforeRequestPublication = undefined;
     park.destroy();
